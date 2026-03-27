@@ -32,6 +32,7 @@ dev = [
 
 [project.scripts]
 ai-stock-arena-bootstrap = "app.cli.bootstrap:run"
+ai-stock-arena-market = "app.cli.market:run_screen"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

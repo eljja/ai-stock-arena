@@ -5,7 +5,6 @@ import typer
 from app.db.session import SessionLocal
 from app.services.bootstrap import bootstrap_database, create_schema
 
-
 cli = typer.Typer(add_completion=False)
 
 

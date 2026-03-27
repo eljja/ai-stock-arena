@@ -13,8 +13,8 @@ from app.config.models import (
     MarketConfig,
     ProvidersConfig,
     RuntimeConfig,
-    ScreeningConfig,
     ScoreWeights,
+    ScreeningConfig,
     Settings,
 )
 

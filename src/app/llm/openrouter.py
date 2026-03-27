@@ -6,7 +6,6 @@ import httpx
 
 from app.config.loader import load_settings
 
-
 BASE_URL = "https://openrouter.ai/api/v1"
 
 

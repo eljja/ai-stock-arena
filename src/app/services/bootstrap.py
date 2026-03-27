@@ -11,7 +11,6 @@ from app.db.models import LLMModel, MarketSetting, ModelMarketPrompt, Portfolio
 from app.db.session import engine
 from app.llm.openrouter import OpenRouterClient
 
-
 MARKET_LABELS = {
     "KOSPI": "Korea Composite Stock Price Index",
     "KOSDAQ": "Korea Securities Dealers Automated Quotations",
