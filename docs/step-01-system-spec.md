@@ -1,180 +1,119 @@
-﻿# Step 1: 시스템 명세 확정
+﻿# Step 1: System Specification
 
-## 1. 프로젝트 목표
+## Objective
 
-이 시스템의 목적은 여러 LLM 모델이 동일한 투자 규칙과 동일한 데이터 입력을 받았을 때, 어떤 모델이 더 안정적이고 수익성 있는 의사결정을 내리는지 비교하는 것이다.
+AI Stock Arena compares multiple LLMs under the same portfolio rules and market inputs to evaluate which models produce stronger virtual trading outcomes.
 
-이 프로젝트는 실제 주문 시스템이 아니라 `가상 체결 기반 벤치마크 시스템`으로 설계한다.
+This is a benchmark system, not a live brokerage integration.
 
-## 2. 실험 단위
+## Experimental Units
 
-각 LLM 모델은 아래 3개의 독립 포트폴리오를 가진다.
+Each model owns three independent portfolios:
 
 - `KOSPI`
 - `KOSDAQ`
 - `US`
 
-초기 자본:
+Initial balances:
 
 - KOSPI: `10,000,000 KRW`
 - KOSDAQ: `10,000,000 KRW`
 - US: `10,000 USD`
 
-공통 규칙:
+## Market Scope
 
-- 시장별 최대 보유 종목 수: `10`
-- 매수와 매도는 모두 수수료와 세금을 반영
-- 1시간마다 판단 수행
-- 포트폴리오, 포지션, 거래 이력, 성과 스냅샷은 모두 DB에 저장
+The user requirement for the United States is the broad market rather than a single ETF or sector subset. The implementation therefore uses this pattern:
 
-## 3. "미국 시장 전체"의 구현 방식
+1. maintain a market universe
+2. screen that universe every cycle
+3. send only screened candidates plus current holdings to the LLM
 
-사용자 요구는 미국 시장 전체다. 하지만 전 종목을 매 시간 전부 LLM 입력으로 넘기는 방식은 비용과 안정성 측면에서 비현실적이다.
+This keeps cost and latency under control while still targeting the wider market.
 
-따라서 구현은 아래 방식으로 고정한다.
+## Trading Rules
 
-1. `전체 시장 유니버스`를 보유한다.
-2. 매 시간 `스크리너`가 전체 유니버스에서 후보군을 추린다.
-3. LLM은 후보군과 현재 보유 종목만 보고 판단한다.
+- maximum 10 positions per market
+- hourly decision cadence
+- market-specific fees and taxes applied to virtual trades
+- every portfolio, position, trade, and performance snapshot stored in the database
 
-초기 구현 기준:
+## Cost Model Defaults
 
-- KOSPI: 코스피 상장 보통주 유니버스
-- KOSDAQ: 코스닥 상장 보통주 유니버스
-- US: NYSE, NASDAQ, NYSE American 상장 보통주 유니버스
+### Korea
 
-1차 구현에서는 전체 유니버스를 매 시간 직접 풀스캔하지 않고, 아래 기준으로 후보군을 구성한다.
-
-- 기존 보유 종목은 항상 포함
-- 거래대금 상위
-- 시가총액 하한 통과
-- 최근 1시간 변동성/거래량 급증 종목
-- 뉴스 또는 가격 모멘텀 상위 종목
-
-이 구조면 "시장 전체"를 대상으로 하면서도 매 시간 계산량과 LLM 비용을 제어할 수 있다.
-
-## 4. 수수료와 세금 기본 정책
-
-수수료는 하드코딩하지 않고 설정값으로 관리한다. 이후 대시보드에서 슬라이더로 조정 가능하게 만든다.
-
-초기 기본값은 아래처럼 둔다.
-
-### 한국 시장 기본값
-
-- 매수 수수료: `0.015%`
-- 매도 수수료: `0.015%`
-- 매도 세금:
+- buy commission: `0.015%`
+- sell commission: `0.015%`
+- sell tax:
   - KOSPI: `0.20%`
   - KOSDAQ: `0.20%`
 
-### 미국 시장 기본값
+### United States
 
-- 매수 수수료: `0.00%`
-- 매도 수수료: `0.00%`
-- 매도 규제성 부과금: `0.002 bps` 기본값으로 별도 설정
+- buy commission: `0.00%`
+- sell commission: `0.00%`
+- sell regulatory fee: configurable, defaulted to a near-zero rate
 
-## 5. 점수 체계
+All of these values are configuration-driven and can later be exposed in the dashboard.
 
-필수 저장 지표:
+## Score Components
 
-- 누적 수익률
-- 일간 수익률
-- 실현 손익
-- 미실현 손익
-- 변동성
-- 샤프 비율
-- 최대 낙폭(MDD)
-- 승률
-- 손익비
-- 거래 횟수
-- 회전율
-- 평균 보유 기간
+The benchmark stores more than raw return.
 
-초기 종합 점수는 정규화 후 가중합으로 계산한다.
+Metrics to persist:
 
-- 누적 수익률: `35%`
-- 샤프 비율: `20%`
-- 최대 낙폭 역점수: `15%`
-- 승률: `10%`
-- 손익비: `10%`
-- 변동성 역점수: `5%`
-- 회전율 패널티: `5%`
+- total return
+- daily return
+- realized PnL
+- unrealized PnL
+- volatility
+- Sharpe ratio
+- max drawdown
+- win rate
+- profit factor
+- trade count
+- turnover
+- average holding period
 
-## 6. LLM 프롬프트 정책
+Initial weighted score:
 
-각 LLM은 시장별로 자기 최적화 프롬프트를 먼저 생성한다.
+- total return: `35%`
+- Sharpe ratio: `20%`
+- max drawdown inverse: `15%`
+- win rate: `10%`
+- profit factor: `10%`
+- volatility inverse: `5%`
+- turnover penalty: `5%`
 
-## 7. yfinance를 기본 실시간 공급원으로 보기 어려운 이유
+## Prompt Policy
 
-`yfinance`는 빠른 프로토타입에는 유용하지만, 24시간 상시 서비스의 주 데이터 소스로는 한계가 있다.
+Each LLM first generates its own reusable market-specific trading prompt in English. The live cycle then feeds the model:
 
-핵심 이유:
+- current portfolio state
+- current holdings
+- screened candidates
+- recent price features
+- transaction cost assumptions
 
-- Yahoo Finance 비공식 경로를 사용한다.
-- 공식 SLA가 없다.
-- 과도한 요청 시 `429 Too Many Requests`가 발생할 수 있다.
-- 종목 메타데이터와 장중 데이터의 일관성이 시장별로 다를 수 있다.
-- 한국 시장 장중/세부 데이터 정합성이 운영급 실험에 충분하지 않을 수 있다.
+The model must return a structured JSON decision.
 
-권장 전략:
+## Market Data Policy
 
-- Step 2~3 프로토타입: `yfinance` 사용 가능
-- Step 4 이후 운영형: 미국은 Polygon, Finnhub, Alpaca 중 하나 검토
-- 한국은 KRX/브로커 API 또는 별도 상용 데이터 소스 검토
+`yfinance` is acceptable for early prototyping but should not be treated as a long-term production-grade feed because it is unofficial and subject to inconsistent rate limits and data behavior.
 
-## 8. 데이터 소스 전략
+Recommended path:
 
-초기 단계:
+- early prototype: `yfinance`
+- later production migration: provider abstraction with official or paid feeds
 
-- 가격 데이터: `yfinance` 기반 프로토타입
-- 뉴스 데이터: 추후 확정
-- 모델 목록: OpenRouter `/models`
+## Initial Architecture
 
-운영 단계:
+- Oracle Cloud Free Tier Ubuntu VM
+- PostgreSQL
+- FastAPI
+- APScheduler
+- Streamlit
+- systemd
 
-- 가격 데이터 공급자 추상화 계층 도입
-- `provider = yahoo | finnhub | alpaca | custom` 식으로 교체 가능하게 설계
+## Step 1 Output
 
-## 9. 대시보드 요구사항
-
-대시보드에는 최소 아래 정보가 있어야 한다.
-
-- 모델별 종합 순위
-- 시장별 수익률 비교
-- 현재 보유 종목
-- 평균 매입가
-- 현재가
-- 미실현 손익률
-- 실현 손익 누계
-- 가용 현금
-- 총 자산 가치
-- 최근 거래 이력
-- 시간대별 성능 추이
-- 수수료/세금 조정 슬라이더
-
-## 10. Oracle Cloud 기준 아키텍처
-
-- VM: Oracle Cloud Free Tier Ubuntu
-- DB: PostgreSQL
-- Backend API: FastAPI
-- Scheduler: APScheduler
-- Dashboard: Streamlit
-- Process manager: systemd
-
-## 11. Step 1 결정 사항 요약
-
-- 시장 단위는 `KOSPI`, `KOSDAQ`, `US`
-- 미국은 전체 시장을 직접 전부 넣는 게 아니라 스크리닝 기반 후보군 방식으로 구현
-- 수수료와 세금은 설정 파일 기반으로 관리
-- 한국과 미국 기본 비용 구조를 분리
-- 성능 비교는 다중 지표 + 종합 점수 방식으로 진행
-- `yfinance`는 프로토타입용으로만 허용
-
-## 12. Step 2에서 바로 구현할 것
-
-- 앱 설정 로더
-- DB 모델
-- OpenRouter 모델 동기화
-- 포트폴리오 초기화
-- 수수료 설정 테이블
-- 시장/모델별 프롬프트 저장 구조
+Step 1 fixed the market units, cost defaults, score model, and the prototype-vs-production data-source policy.

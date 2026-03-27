@@ -1,4 +1,4 @@
-[build-system]
+﻿[build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
@@ -33,6 +33,7 @@ dev = [
 [project.scripts]
 ai-stock-arena-bootstrap = "app.cli.bootstrap:run"
 ai-stock-arena-market = "app.cli.market:run_screen"
+ai-stock-arena-llm = "app.cli.llm:run_llm"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
