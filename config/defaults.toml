@@ -1,0 +1,51 @@
+[app]
+name = "ai-stock-arena"
+timezone = "Asia/Seoul"
+decision_interval_minutes = 60
+max_positions_per_market = 10
+
+[markets.KOSPI]
+enabled = true
+currency = "KRW"
+initial_cash = 10000000
+buy_commission_rate = 0.00015
+sell_commission_rate = 0.00015
+sell_tax_rate = 0.00200
+
+[markets.KOSDAQ]
+enabled = true
+currency = "KRW"
+initial_cash = 10000000
+buy_commission_rate = 0.00015
+sell_commission_rate = 0.00015
+sell_tax_rate = 0.00200
+
+[markets.US]
+enabled = true
+currency = "USD"
+initial_cash = 10000
+buy_commission_rate = 0.0
+sell_commission_rate = 0.0
+sell_regulatory_fee_rate = 0.0000002
+
+[screening]
+candidate_limit = 40
+include_current_positions = true
+min_market_cap_usd = 1000000000
+min_avg_dollar_volume_usd = 5000000
+min_market_cap_krw = 300000000000
+min_avg_trading_value_krw = 2000000000
+
+[scoring.weights]
+total_return = 0.35
+sharpe_ratio = 0.20
+max_drawdown_inverse = 0.15
+win_rate = 0.10
+profit_factor = 0.10
+volatility_inverse = 0.05
+turnover_penalty = 0.05
+
+[providers]
+prices = "yahoo"
+news = "pending"
+llm = "openrouter"
