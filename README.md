@@ -9,7 +9,7 @@ AI Stock Arena is a virtual trading benchmark for comparing how different LLMs b
 - Hourly-style market screening based on recent price action
 - Virtual trade execution with market-specific costs
 - Portfolio, position, trade, and performance snapshot persistence
-- CLI entry points for bootstrap, market screening, demo execution, and LLM-driven cycles
+- CLI entry points for bootstrap, model catalog inspection, market screening, demo execution, and LLM-driven cycles
 
 ## Repository Layout
 
@@ -30,6 +30,7 @@ copy .env.example .env
 
 ```powershell
 .\.venv\Scripts\python.exe -m app.cli.bootstrap --skip-openrouter-sync
+.\.venv\Scripts\python.exe -m app.cli.models list-models --sort-by price-low --free-mode only --limit 20
 .\.venv\Scripts\python.exe -m app.cli.market screen US --limit 5
 .\.venv\Scripts\python.exe -m app.cli.market demo-cycle US --model-id demo/manual-strategy --picks 2
 .\.venv\Scripts\python.exe -m app.cli.llm generate-prompt US openai/gpt-4o-mini
@@ -39,6 +40,7 @@ copy .env.example .env
 ## Notes
 
 - LLM prompts and model-facing payloads are written in English.
+- OpenRouter free variants and zero-token-cost models can be listed through the model catalog CLI.
 - `yfinance` is currently used for prototype market data collection.
 - The current universe is a curated starter set, not the full exchange universe yet.
 - Oracle deployment, API, dashboard, and automated scheduler are still pending.

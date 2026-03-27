@@ -20,9 +20,47 @@ class OpenRouterModel:
     model_id: str
     display_name: str
     context_length: int | None
-    prompt_price_per_million: float | None
-    completion_price_per_million: float | None
+    prompt_price_per_token: float | None
+    completion_price_per_token: float | None
+    request_price: float | None
     metadata_json: dict
+
+    @property
+    def prompt_price_per_million(self) -> float | None:
+        if self.prompt_price_per_token is None:
+            return None
+        return self.prompt_price_per_token * 1_000_000
+
+    @property
+    def completion_price_per_million(self) -> float | None:
+        if self.completion_price_per_token is None:
+            return None
+        return self.completion_price_per_token * 1_000_000
+
+    @property
+    def is_free_variant(self) -> bool:
+        return self.model_id.endswith(":free")
+
+    @property
+    def has_zero_token_cost(self) -> bool:
+        prompt = self.prompt_price_per_token or 0.0
+        completion = self.completion_price_per_token or 0.0
+        return prompt == 0.0 and completion == 0.0
+
+    @property
+    def is_free_like(self) -> bool:
+        return self.is_free_variant or self.has_zero_token_cost
+
+    @property
+    def pricing_label(self) -> str:
+        prompt = self.prompt_price_per_million
+        completion = self.completion_price_per_million
+        request = self.request_price
+        return (
+            f"input=${prompt:.4f}/1M, output=${completion:.4f}/1M, request=${request or 0:.6f}"
+            if prompt is not None and completion is not None
+            else "pricing unavailable"
+        )
 
 
 class OpenRouterClient:
@@ -42,6 +80,28 @@ class OpenRouterClient:
         payload = response.json()
         items = payload.get("data", [])
         return [self._map_model(item) for item in items]
+
+    def catalog(
+        self,
+        sort_by: str = "price-low",
+        free_mode: str = "include",
+    ) -> list[OpenRouterModel]:
+        models = self.list_models()
+        if free_mode == "only":
+            models = [model for model in models if model.is_free_like]
+        elif free_mode == "exclude":
+            models = [model for model in models if not model.is_free_like]
+
+        if sort_by == "price-low":
+            models.sort(key=_price_sort_key)
+        elif sort_by == "price-high":
+            models.sort(key=_price_sort_key, reverse=True)
+        elif sort_by == "name":
+            models.sort(key=lambda model: model.display_name.lower())
+        elif sort_by == "popular":
+            # Official /models responses do not document popularity ordering.
+            pass
+        return models
 
     def generate_meta_prompt(self, model_id: str, market_code: str) -> PromptGenerationResult:
         response_text = self.chat_completion(
@@ -111,10 +171,18 @@ class OpenRouterClient:
             model_id=item["id"],
             display_name=item.get("name") or item["id"],
             context_length=item.get("context_length"),
-            prompt_price_per_million=_safe_float(pricing.get("prompt")),
-            completion_price_per_million=_safe_float(pricing.get("completion")),
+            prompt_price_per_token=_safe_float(pricing.get("prompt")),
+            completion_price_per_token=_safe_float(pricing.get("completion")),
+            request_price=_safe_float(pricing.get("request")),
             metadata_json=item,
         )
+
+
+def _price_sort_key(model: OpenRouterModel) -> tuple[float, float, str]:
+    prompt = model.prompt_price_per_million
+    completion = model.completion_price_per_million
+    combined = (prompt or 0.0) + (completion or 0.0)
+    return combined, prompt or 0.0, model.display_name.lower()
 
 
 def _safe_float(value: str | float | int | None) -> float | None:
