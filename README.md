@@ -1,4 +1,4 @@
-# AI Stock Arena
+﻿# AI Stock Arena
 
 AI Stock Arena is a virtual trading benchmark for comparing how different LLMs behave under the same market constraints.
 
@@ -36,7 +36,7 @@ copy .env.example .env
 .\.venv\Scripts\python.exe -m app.cli.llm generate-prompt US openai/gpt-4o-mini
 .\.venv\Scripts\python.exe -m app.cli.llm run-cycle US openai/gpt-4o-mini --candidate-limit 12
 .\.venv\Scripts\python.exe -m uvicorn app.api.main:app --reload
-.\.venv\Scripts\python.exe -m streamlit run src\app\dashboard\app.py
+.\.venv\Scripts\python.exe -m streamlit run src\app\dashboard\main.py
 ```
 
 ## Notes
@@ -48,4 +48,5 @@ copy .env.example .env
 - The FastAPI layer is read-only for dashboard and debugging use.
 - Streamlit can read data directly from the database or from `API_BASE_URL` if set.
 - Oracle deployment and automated scheduler are still pending.
+
 
