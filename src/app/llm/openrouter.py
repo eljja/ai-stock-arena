@@ -131,6 +131,24 @@ class OpenRouterClient:
         decision.raw_response = response_text
         return decision
 
+    def probe_model(self, model_id: str) -> tuple[bool, str]:
+        try:
+            response_text = self.chat_completion(
+                model_id=model_id,
+                user_prompt="Reply with READY only.",
+                system_prompt="Return the single word READY.",
+                temperature=0.0,
+            )
+        except httpx.HTTPStatusError as exc:
+            return False, f"HTTP {exc.response.status_code}"
+        except Exception as exc:  # pragma: no cover
+            return False, str(exc)
+
+        normalized = response_text.strip().upper()
+        if "READY" in normalized:
+            return True, normalized
+        return True, normalized or "OK"
+
     def chat_completion(
         self,
         model_id: str,

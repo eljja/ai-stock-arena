@@ -9,7 +9,7 @@ from app.config.loader import load_runtime_config, load_settings, parse_default_
 from app.db.base import Base
 from app.db.models import LLMModel, MarketSetting, ModelMarketPrompt, Portfolio
 from app.db.session import engine
-from app.llm.openrouter import OpenRouterClient
+from app.llm.openrouter import OpenRouterClient, OpenRouterModel
 
 MARKET_LABELS = {
     "KOSPI": "Korea Composite Stock Price Index",
@@ -25,6 +25,13 @@ class BootstrapSummary:
     market_settings_upserted: int
     portfolios_created: int
     prompt_placeholders_created: int
+
+
+@dataclass(slots=True)
+class ModelProbeResult:
+    model_id: str
+    success: bool
+    detail: str
 
 
 def create_schema() -> None:
@@ -58,23 +65,76 @@ def sync_models_from_openrouter(session: Session, selected_model_ids: set[str]) 
     client = OpenRouterClient()
     synced = 0
     for external_model in client.list_models():
-        existing = session.scalar(select(LLMModel).where(LLMModel.model_id == external_model.model_id))
-        if existing is None:
-            existing = LLMModel(
-                provider="openrouter",
-                model_id=external_model.model_id,
-                display_name=external_model.display_name,
-            )
-            session.add(existing)
-        existing.display_name = external_model.display_name
-        existing.context_length = external_model.context_length
-        existing.prompt_price_per_million = external_model.prompt_price_per_million
-        existing.completion_price_per_million = external_model.completion_price_per_million
-        existing.metadata_json = external_model.metadata_json
-        existing.is_available = True
-        existing.is_selected = external_model.model_id in selected_model_ids if selected_model_ids else existing.is_selected
+        upsert_openrouter_model(session, external_model, selected_model_ids)
         synced += 1
     return synced
+
+
+def probe_and_select_free_models(
+    session: Session,
+    target_count: int = 3,
+    candidate_limit: int = 12,
+    sort_by: str = "price-low",
+) -> list[ModelProbeResult]:
+    client = OpenRouterClient()
+    catalog = client.catalog(sort_by=sort_by, free_mode="only")[:candidate_limit]
+
+    free_model_ids = {model.model_id for model in catalog}
+    for existing in session.scalars(select(LLMModel).where(LLMModel.model_id.in_(free_model_ids))).all():
+        existing.is_selected = False
+
+    results: list[ModelProbeResult] = []
+    selected_count = 0
+    for external_model in catalog:
+        record = upsert_openrouter_model(session, external_model, selected_model_ids=set())
+        success, detail = client.probe_model(external_model.model_id)
+        record.is_available = success
+        record.metadata_json = {
+            **(record.metadata_json or {}),
+            "probe": {"success": success, "detail": detail},
+            "is_free_like": external_model.is_free_like,
+        }
+        if success and selected_count < target_count:
+            record.is_selected = True
+            selected_count += 1
+        else:
+            record.is_selected = False
+        results.append(ModelProbeResult(record.model_id, success, detail))
+
+    session.flush()
+    initialize_selected_model_state(session)
+    session.commit()
+    return results
+
+
+def upsert_openrouter_model(
+    session: Session,
+    external_model: OpenRouterModel,
+    selected_model_ids: set[str],
+) -> LLMModel:
+    existing = session.scalar(select(LLMModel).where(LLMModel.model_id == external_model.model_id))
+    if existing is None:
+        existing = LLMModel(
+            provider="openrouter",
+            model_id=external_model.model_id,
+            display_name=external_model.display_name,
+        )
+        session.add(existing)
+    existing.display_name = external_model.display_name
+    existing.context_length = external_model.context_length
+    existing.prompt_price_per_million = external_model.prompt_price_per_million
+    existing.completion_price_per_million = external_model.completion_price_per_million
+    existing.metadata_json = {
+        **(existing.metadata_json or {}),
+        **external_model.metadata_json,
+        "is_free_like": external_model.is_free_like,
+        "pricing_label": external_model.pricing_label,
+    }
+    existing.is_available = True
+    existing.is_selected = (
+        external_model.model_id in selected_model_ids if selected_model_ids else existing.is_selected
+    )
+    return existing
 
 
 def upsert_market_settings(session: Session, max_positions: int) -> int:
