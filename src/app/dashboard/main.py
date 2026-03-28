@@ -116,6 +116,11 @@ def _pct(value: float | None) -> str:
     return f"{value:.2f}%"
 
 
+def _weekday_labels(values: list[int]) -> str:
+    mapping = dict(WEEKDAY_OPTIONS)
+    return ", ".join(mapping.get(value, str(value)) for value in values)
+
+
 def _is_admin(token: str) -> bool:
     return bool(settings.admin_token and token and token == settings.admin_token)
 
@@ -138,7 +143,7 @@ settings_payload = payload["settings"] or {
     "active_weekdays": [0, 1, 2, 3, 4],
     "markets": {
         "KR": {"enabled": True, "window_start": "08:00", "window_end": "16:00"},
-        "US": {"enabled": True, "window_start": "08:30", "window_end": "16:30"},
+        "US": {"enabled": True, "window_start": "08:00", "window_end": "17:00"},
     },
     "news_enabled": False,
     "news_mode": "shared_off",
@@ -165,13 +170,15 @@ if chosen_models:
     models_df = models_df[models_df["model_id"].isin(chosen_models)]
 
 market_windows = settings_payload.get("markets", {})
-window_caption = " | ".join(
-    f"{code}: {cfg.get('window_start', 'n/a')}-{cfg.get('window_end', 'n/a')}"
-    for code, cfg in market_windows.items()
-)
+utc_windows = {
+    item.get("market_code"): item.get("window_label_utc", "n/a")
+    for item in scheduler_payload.get("markets", [])
+}
+window_caption = " | ".join(f"{code}: {utc_windows.get(code, 'n/a')}" for code in market_windows)
 st.caption(
     f"Cadence: every {settings_payload.get('decision_interval_minutes', 60)} minutes | "
-    f"Weekdays: {settings_payload.get('active_weekdays', [0, 1, 2, 3, 4])} | {window_caption}"
+    f"Weekdays: {_weekday_labels(settings_payload.get('active_weekdays', [0, 1, 2, 3, 4]))} | "
+    f"Execution window (UTC): {window_caption}"
 )
 
 metric_cols = st.columns(4)
@@ -188,6 +195,7 @@ if not scheduler_df.empty:
             [
                 "market_code",
                 "market_timezone",
+                "window_label_utc",
                 "enabled",
                 "in_active_window",
                 "is_due",
@@ -201,6 +209,7 @@ if not scheduler_df.empty:
             columns={
                 "market_code": "Market",
                 "market_timezone": "Timezone",
+                "window_label_utc": "Window (UTC)",
                 "enabled": "Enabled",
                 "in_active_window": "In window",
                 "is_due": "Due now",
@@ -236,40 +245,41 @@ with ranking_tab:
         ranked[sort_column] = pd.to_numeric(ranked[sort_column], errors="coerce")
         ranked = ranked.sort_values(by=[sort_column, "current_return_pct"], ascending=[False, False], na_position="last")
         ranked.index = range(1, len(ranked) + 1)
+        ranking_columns = [
+            "model_id",
+            "display_name",
+            "search_mode",
+            "is_free_like",
+            sort_column,
+            "kr_return_pct",
+            "us_return_pct",
+            "composite_score",
+            "max_drawdown",
+            "win_rate",
+            "trade_count",
+            "llm_cost_usd",
+            "pricing_label",
+        ]
+        rename_map = {
+            "model_id": "Model ID",
+            "display_name": "Display name",
+            "search_mode": "Search",
+            "is_free_like": "Free",
+            sort_column: period_label,
+            "kr_return_pct": "KR return %",
+            "us_return_pct": "US return %",
+            "composite_score": "Composite",
+            "max_drawdown": "MDD",
+            "win_rate": "Win rate",
+            "trade_count": "Trades",
+            "llm_cost_usd": "LLM cost (USD)",
+            "pricing_label": "Pricing",
+        }
+        if sort_column != "current_return_pct":
+            ranking_columns.insert(5, "current_return_pct")
+            rename_map["current_return_pct"] = "Since inception"
         st.dataframe(
-            ranked[
-                [
-                    "model_id",
-                    "display_name",
-                    "search_mode",
-                    "is_free_like",
-                    sort_column,
-                    "current_return_pct",
-                    "kr_return_pct",
-                    "us_return_pct",
-                    "composite_score",
-                    "max_drawdown",
-                    "win_rate",
-                    "trade_count",
-                    "pricing_label",
-                ]
-            ].rename(
-                columns={
-                    "model_id": "Model ID",
-                    "display_name": "Display name",
-                    "search_mode": "Search",
-                    "is_free_like": "Free",
-                    sort_column: period_label,
-                    "current_return_pct": "Since inception",
-                    "kr_return_pct": "KR return %",
-                    "us_return_pct": "US return %",
-                    "composite_score": "Composite",
-                    "max_drawdown": "MDD",
-                    "win_rate": "Win rate",
-                    "trade_count": "Trades",
-                    "pricing_label": "Pricing",
-                }
-            ),
+            ranked[ranking_columns].rename(columns=rename_map),
             use_container_width=True,
         )
 
@@ -334,12 +344,43 @@ with detail_tab:
             st.caption("No LLM decision logs yet.")
         else:
             latest_log = logs_df.iloc[0]
+            usage_cols = st.columns(4)
+            usage_cols[0].metric("Prompt tokens", latest_log.get("prompt_tokens") or 0)
+            usage_cols[1].metric("Completion tokens", latest_log.get("completion_tokens") or 0)
+            usage_cols[2].metric("Total tokens", latest_log.get("total_tokens") or 0)
+            usage_cols[3].metric("Estimated LLM cost", _money(latest_log.get("estimated_cost_usd")))
             st.text_area("Prompt text", latest_log.get("prompt_text") or "", height=180)
             st.json(latest_log.get("input_payload") or {})
             st.text_area("Raw output", latest_log.get("raw_output_text") or latest_log.get("error_message") or "", height=180)
             st.json(latest_log.get("parsed_output") or {})
             st.markdown("**Recent log entries**")
-            st.dataframe(logs_df[["created_at", "status", "market_code", "request_model_id"]], use_container_width=True, hide_index=True)
+            st.dataframe(
+                logs_df[
+                    [
+                        "created_at",
+                        "status",
+                        "market_code",
+                        "request_model_id",
+                        "prompt_tokens",
+                        "completion_tokens",
+                        "total_tokens",
+                        "estimated_cost_usd",
+                    ]
+                ].rename(
+                    columns={
+                        "created_at": "Created at",
+                        "status": "Status",
+                        "market_code": "Market",
+                        "request_model_id": "Request model",
+                        "prompt_tokens": "Prompt tokens",
+                        "completion_tokens": "Completion tokens",
+                        "total_tokens": "Total tokens",
+                        "estimated_cost_usd": "Estimated cost (USD)",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 with admin_tab:
     st.subheader("Admin controls")
@@ -364,10 +405,10 @@ with admin_tab:
                 default=weekday_defaults,
                 format_func=lambda value: dict(WEEKDAY_OPTIONS)[value],
             )
-            kr_start = st.text_input("KR window start", value=market_windows.get("KR", {}).get("window_start", "08:00"))
-            kr_end = st.text_input("KR window end", value=market_windows.get("KR", {}).get("window_end", "16:00"))
-            us_start = st.text_input("US window start", value=market_windows.get("US", {}).get("window_start", "08:30"))
-            us_end = st.text_input("US window end", value=market_windows.get("US", {}).get("window_end", "16:30"))
+            kr_start = st.text_input("KR window start (market local)", value=market_windows.get("KR", {}).get("window_start", "08:00"))
+            kr_end = st.text_input("KR window end (market local)", value=market_windows.get("KR", {}).get("window_end", "16:00"))
+            us_start = st.text_input("US window start (market local)", value=market_windows.get("US", {}).get("window_start", "08:00"))
+            us_end = st.text_input("US window end (market local)", value=market_windows.get("US", {}).get("window_end", "17:00"))
             news_enabled = st.checkbox("Enable shared news", value=bool(settings_payload.get("news_enabled", False)))
             if st.form_submit_button("Save runtime settings"):
                 payload = {

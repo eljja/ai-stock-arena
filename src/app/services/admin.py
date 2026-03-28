@@ -33,7 +33,7 @@ DEFAULT_RUNTIME_SETTINGS = {
     "active_weekdays": [0, 1, 2, 3, 4],
     "markets": {
         "KR": {"enabled": True, "window_start": "08:00", "window_end": "16:00"},
-        "US": {"enabled": True, "window_start": "08:30", "window_end": "16:30"},
+        "US": {"enabled": True, "window_start": "08:00", "window_end": "17:00"},
     },
     "news_enabled": False,
     "news_mode": "shared_off",
@@ -53,7 +53,21 @@ def get_runtime_settings(session: Session) -> dict:
         setting = AdminSetting(key=RUNTIME_SETTINGS_KEY, value_json=DEFAULT_RUNTIME_SETTINGS.copy())
         session.add(setting)
         session.flush()
-    return {**DEFAULT_RUNTIME_SETTINGS, **(setting.value_json or {})}
+        return {**DEFAULT_RUNTIME_SETTINGS}
+
+    value = {**DEFAULT_RUNTIME_SETTINGS, **(setting.value_json or {})}
+    markets = {**DEFAULT_RUNTIME_SETTINGS.get("markets", {}), **(value.get("markets", {}))}
+    changed = False
+    us_window = markets.get("US", {})
+    if us_window.get("window_start") == "08:30" and us_window.get("window_end") == "16:30":
+        markets["US"] = {**us_window, "window_start": "08:00", "window_end": "17:00"}
+        changed = True
+    value["markets"] = markets
+    if changed:
+        setting.value_json = value
+        setting.updated_at = datetime.now(UTC)
+        session.flush()
+    return value
 
 
 def update_runtime_settings(session: Session, payload: dict) -> dict:
@@ -164,6 +178,7 @@ def get_scheduler_status(session: Session, now: datetime | None = None) -> dict:
             {
                 "market_code": market_code,
                 "market_timezone": timezone_name,
+                "window_label_utc": _utc_window_label(config, timezone_name),
                 "enabled": enabled,
                 "in_active_window": in_active_window,
                 "is_due": is_due,
@@ -382,3 +397,29 @@ def _compute_next_run(
             continue
         return datetime.combine(next_day, start_time, tzinfo=timezone).astimezone(UTC)
     return None
+
+
+def _utc_window_label(config: dict, timezone_name: str) -> str:
+    timezone = ZoneInfo(timezone_name)
+    start_time = _parse_hhmm(config.get("window_start", "00:00"))
+    end_time = _parse_hhmm(config.get("window_end", "23:59"))
+    reference_dates = [datetime(2026, 1, 15), datetime(2026, 7, 15)] if timezone_name == "America/New_York" else [datetime(2026, 1, 15)]
+
+    start_candidates: list[int] = []
+    end_candidates: list[int] = []
+    for reference in reference_dates:
+        start_utc = datetime.combine(reference.date(), start_time, tzinfo=timezone).astimezone(UTC)
+        end_utc = datetime.combine(reference.date(), end_time, tzinfo=timezone).astimezone(UTC)
+        start_candidates.append(start_utc.hour * 60 + start_utc.minute)
+        end_candidates.append(end_utc.hour * 60 + end_utc.minute)
+
+    start_minutes = min(start_candidates)
+    end_minutes = max(end_candidates)
+    return f"{_minutes_to_hhmm(start_minutes)}-{_minutes_to_hhmm(end_minutes)} UTC"
+
+
+def _minutes_to_hhmm(total_minutes: int) -> str:
+    normalized = total_minutes % (24 * 60)
+    hour = normalized // 60
+    minute = normalized % 60
+    return f"{hour:02d}:{minute:02d}"

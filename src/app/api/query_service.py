@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -227,6 +227,7 @@ def list_rankings(
     models_by_id = {item.model_id: item for item in list_models(session=session, selected_only=selected_only)}
     histories = _snapshot_histories(session=session, selected_only=selected_only)
     trade_counts = _trade_counts(session=session, selected_only=selected_only)
+    llm_costs = _llm_cost_totals(session=session, selected_only=selected_only)
 
     by_model: dict[str, list[PortfolioSummary]] = defaultdict(list)
     for portfolio in portfolios:
@@ -244,7 +245,7 @@ def list_rankings(
         win_rates: list[float] = []
         updated_at: datetime | None = None
         for history_key, history in histories.items():
-            history_model_id, history_market_code = history_key
+            history_model_id, _history_market_code = history_key
             if history_model_id != model_id:
                 continue
             latest = history[-1] if history else None
@@ -274,6 +275,7 @@ def list_rankings(
                 max_drawdown=_mean(max_drawdowns),
                 win_rate=_mean(win_rates),
                 trade_count=trade_counts.get(model_id, 0),
+                llm_cost_usd=llm_costs.get(model_id, 0.0),
                 updated_at=updated_at or model.updated_at,
             )
         )
@@ -345,6 +347,10 @@ def list_llm_logs(
             input_payload=log.input_payload,
             raw_output_text=log.raw_output_text,
             parsed_output=log.parsed_output,
+            prompt_tokens=_log_int(log, "prompt_tokens"),
+            completion_tokens=_log_int(log, "completion_tokens"),
+            total_tokens=_log_int(log, "total_tokens"),
+            estimated_cost_usd=_log_float(log, "estimated_cost_usd"),
             error_message=log.error_message,
             created_at=log.created_at,
         )
@@ -546,6 +552,17 @@ def _trade_counts(session: Session, selected_only: bool) -> dict[str, int]:
     return {model_id: count for model_id, count in rows}
 
 
+def _llm_cost_totals(session: Session, selected_only: bool) -> dict[str, float]:
+    stmt = select(LLMDecisionLog)
+    if selected_only:
+        stmt = stmt.join(LLMModel, LLMModel.model_id == LLMDecisionLog.model_id).where(LLMModel.is_selected.is_(True))
+    logs = session.scalars(stmt).all()
+    totals: dict[str, float] = defaultdict(float)
+    for log in logs:
+        totals[log.model_id] += _log_float(log, "estimated_cost_usd") or 0.0
+    return dict(totals)
+
+
 def _period_delta(history: list[PerformanceSnapshot], delta: timedelta) -> float | None:
     if len(history) < 2:
         return None
@@ -574,3 +591,19 @@ def _pct(current_value: float, basis_value: float) -> float:
     return ((current_value - basis_value) / basis_value) * 100
 
 
+def _log_int(log: LLMDecisionLog, key: str) -> int | None:
+    if not isinstance(log.parsed_output, dict):
+        return None
+    value = log.parsed_output.get(key)
+    if value in (None, ""):
+        return None
+    return int(value)
+
+
+def _log_float(log: LLMDecisionLog, key: str) -> float | None:
+    if not isinstance(log.parsed_output, dict):
+        return None
+    value = log.parsed_output.get(key)
+    if value in (None, ""):
+        return None
+    return float(value)

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Literal
 
@@ -21,11 +21,19 @@ class TradingDecision(BaseModel):
     hold_tickers: list[str] = Field(default_factory=list)
     rejected_tickers: list[str] = Field(default_factory=list)
     raw_response: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_cost_usd: float | None = None
 
 
 class PromptGenerationResult(BaseModel):
     prompt_content: str
     raw_response: str
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_cost_usd: float | None = None
 
 
 class DecisionContext(BaseModel):
@@ -33,3 +41,10 @@ class DecisionContext(BaseModel):
     portfolio: dict[str, Any]
     current_positions: list[dict[str, Any]]
     candidates: list[dict[str, Any]]
+
+
+class ChatCompletionResult(BaseModel):
+    content: str
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None

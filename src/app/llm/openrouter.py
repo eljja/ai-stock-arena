@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import time
@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.config.loader import load_settings
-from app.llm.schemas import PromptGenerationResult, TradingDecision
+from app.llm.schemas import ChatCompletionResult, PromptGenerationResult, TradingDecision
 
 BASE_URL = "https://openrouter.ai/api/v1"
 JSON_SYSTEM_PROMPT = (
@@ -104,7 +104,7 @@ class OpenRouterClient:
         return models
 
     def generate_meta_prompt(self, model_id: str, market_code: str) -> PromptGenerationResult:
-        response_text = self.chat_completion(
+        completion = self.chat_completion(
             model_id=model_id,
             user_prompt=_meta_prompt_request(market_code),
             system_prompt=(
@@ -113,27 +113,37 @@ class OpenRouterClient:
             ),
             temperature=0.3,
         )
-        return PromptGenerationResult(prompt_content=response_text.strip(), raw_response=response_text)
+        return PromptGenerationResult(
+            prompt_content=completion.content.strip(),
+            raw_response=completion.content,
+            prompt_tokens=completion.prompt_tokens,
+            completion_tokens=completion.completion_tokens,
+            total_tokens=completion.total_tokens,
+            estimated_cost_usd=None,
+        )
 
     def request_trading_decision(
         self,
         model_id: str,
         decision_prompt: str,
     ) -> TradingDecision:
-        response_text = self.chat_completion(
+        completion = self.chat_completion(
             model_id=model_id,
             user_prompt=decision_prompt,
             system_prompt=JSON_SYSTEM_PROMPT,
             temperature=0.2,
         )
-        payload = _extract_json_object(response_text)
+        payload = _extract_json_object(completion.content)
         decision = TradingDecision.model_validate(payload)
-        decision.raw_response = response_text
+        decision.raw_response = completion.content
+        decision.prompt_tokens = completion.prompt_tokens
+        decision.completion_tokens = completion.completion_tokens
+        decision.total_tokens = completion.total_tokens
         return decision
 
     def probe_model(self, model_id: str) -> tuple[bool, str]:
         try:
-            response_text = self.chat_completion(
+            completion = self.chat_completion(
                 model_id=model_id,
                 user_prompt="Reply with READY only.",
                 system_prompt="Return the single word READY.",
@@ -144,7 +154,7 @@ class OpenRouterClient:
         except Exception as exc:  # pragma: no cover
             return False, str(exc)
 
-        normalized = response_text.strip().upper()
+        normalized = completion.content.strip().upper()
         if "READY" in normalized:
             return True, normalized
         return True, normalized or "OK"
@@ -155,7 +165,7 @@ class OpenRouterClient:
         user_prompt: str,
         system_prompt: str | None = None,
         temperature: float = 0.2,
-    ) -> str:
+    ) -> ChatCompletionResult:
         self._ensure_api_key()
         messages = []
         if system_prompt:
@@ -168,7 +178,13 @@ class OpenRouterClient:
             temperature=temperature,
         )
         payload = response.json()
-        return payload["choices"][0]["message"]["content"]
+        usage = payload.get("usage") or {}
+        return ChatCompletionResult(
+            content=payload["choices"][0]["message"]["content"],
+            prompt_tokens=_to_int(usage.get("prompt_tokens") or usage.get("input_tokens")),
+            completion_tokens=_to_int(usage.get("completion_tokens") or usage.get("output_tokens")),
+            total_tokens=_to_int(usage.get("total_tokens")),
+        )
 
     def _post_with_retry(
         self,
@@ -232,6 +248,12 @@ def _safe_float(value: str | float | int | None) -> float | None:
     if value in (None, ""):
         return None
     return float(value)
+
+
+def _to_int(value: int | str | None) -> int | None:
+    if value in (None, ""):
+        return None
+    return int(value)
 
 
 def _extract_json_object(raw_text: str) -> dict:

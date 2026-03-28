@@ -128,6 +128,7 @@ class ModelRanking(BaseModel):
     max_drawdown: float | None
     win_rate: float | None
     trade_count: int
+    llm_cost_usd: float | None
     updated_at: datetime | None
 
 
@@ -142,6 +143,7 @@ class RuntimeSettingsResponse(BaseModel):
 class MarketSchedulerStatus(BaseModel):
     market_code: str
     market_timezone: str
+    window_label_utc: str
     enabled: bool
     in_active_window: bool
     is_due: bool
@@ -216,6 +218,10 @@ class LLMDecisionLogSummary(BaseModel):
     input_payload: dict | None
     raw_output_text: str | None
     parsed_output: dict | None
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    total_tokens: int | None
+    estimated_cost_usd: float | None
     error_message: str | None
     created_at: datetime
 

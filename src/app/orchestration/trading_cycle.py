@@ -64,6 +64,7 @@ class TradingCycleService:
             candidates=candidates,
             snapshot=snapshot,
         )
+        model_record = session.scalar(select(LLMModel).where(LLMModel.model_id == model_id))
         request_model_id = _resolve_request_model_id(session, model_id)
         input_payload = {
             "market_code": market_code,
@@ -74,6 +75,7 @@ class TradingCycleService:
         }
         try:
             decision = self.client.request_trading_decision(model_id=request_model_id, decision_prompt=prompt_text)
+            decision.estimated_cost_usd = _estimate_llm_cost_usd(model_record, decision.prompt_tokens, decision.completion_tokens)
             session.add(
                 LLMDecisionLog(
                     model_id=model_id,
@@ -317,6 +319,20 @@ def _resolve_request_model_id(session: Session, model_id: str) -> str:
         return model_id
     metadata = model.metadata_json or {}
     return metadata.get("request_model_id") or model.model_id
+
+
+def _estimate_llm_cost_usd(
+    model_record: LLMModel | None,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+) -> float | None:
+    if model_record is None:
+        return None
+    if prompt_tokens is None and completion_tokens is None:
+        return None
+    prompt_cost = ((prompt_tokens or 0) / 1_000_000) * (model_record.prompt_price_per_million or 0.0)
+    completion_cost = ((completion_tokens or 0) / 1_000_000) * (model_record.completion_price_per_million or 0.0)
+    return round(prompt_cost + completion_cost, 8)
 
 
 def _quantity_from_cash_amount(cash_amount: float | None, current_price: float) -> int:
