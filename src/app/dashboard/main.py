@@ -9,6 +9,7 @@ SRC_ROOT = ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+import altair as alt
 import httpx
 import pandas as pd
 import streamlit as st
@@ -54,7 +55,7 @@ PERIOD_MAP = {
     "1 day": "return_1d_pct",
 }
 
-st.set_page_config(page_title="AI Stock Arena", layout="wide")
+st.set_page_config(page_title="AI Stock Arena", layout="wide", initial_sidebar_state="expanded")
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -72,6 +73,7 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
                 "trades": client.get("/trades", params={"selected_only": str(selected_only).lower(), "limit": 200}).json(),
                 "snapshots": client.get("/snapshots", params={"selected_only": str(selected_only).lower(), "limit": 2000}).json(),
                 "news": client.get("/news", params={"limit": 5}).json(),
+                "logs": client.get("/llm-logs", params={"limit": 1000}).json(),
             }
 
     with SessionLocal() as session:
@@ -86,6 +88,7 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             "trades": [item.model_dump(mode="json") for item in list_trades(session=session, selected_only=selected_only, limit=200)],
             "snapshots": [item.model_dump(mode="json") for item in list_snapshots(session=session, selected_only=selected_only, limit=2000)],
             "news": [item.model_dump(mode="json") for item in list_news_batches(session=session, limit=5)],
+            "logs": [item.model_dump(mode="json") for item in list_llm_logs(session=session, limit=1000)],
         }
 
 
@@ -151,11 +154,30 @@ def inject_styles() -> None:
         [data-testid="stSidebar"] {
             background: rgba(10, 15, 28, 0.96);
             border-right: 1px solid rgba(148, 163, 184, 0.18);
-            min-width: 26rem !important;
-            max-width: 26rem !important;
+            min-width: 17rem !important;
         }
         [data-testid="stSidebar"] > div:first-child {
-            width: 26rem !important;
+            width: min(20rem, 28vw) !important;
+        }
+        [data-baseweb="tag"] {
+            width: 100% !important;
+            justify-content: space-between !important;
+            background: rgba(244, 63, 94, 0.16) !important;
+            border: 1px solid rgba(251, 113, 133, 0.28) !important;
+        }
+        [data-baseweb="tag"] span {
+            max-width: none !important;
+        }
+        .asa-sidebar-footer {
+            position: fixed;
+            left: 0;
+            bottom: 0;
+            width: min(20rem, 28vw);
+            padding: 12px 16px 14px 16px;
+            background: linear-gradient(180deg, rgba(10,15,28,0.0), rgba(10,15,28,0.98) 24%);
+            color: #94a3b8;
+            font-size: 0.82rem;
+            z-index: 999;
         }
         [data-testid="stTabs"] button {
             font-family: 'Space Grotesk', sans-serif;
@@ -326,6 +348,93 @@ def model_allocation_frame(model_id: str, positions_df: pd.DataFrame, portfolios
     return allocation_df
 
 
+COLOR_RANGE = ["#60a5fa", "#34d399", "#f472b6", "#f59e0b", "#a78bfa", "#f87171", "#22d3ee", "#fb7185"]
+
+
+def allocation_chart(allocation_df: pd.DataFrame) -> alt.Chart:
+    if allocation_df.empty:
+        return alt.Chart(pd.DataFrame({"label": [], "weight_pct": []})).mark_bar()
+    return (
+        alt.Chart(allocation_df)
+        .mark_bar(cornerRadiusEnd=5)
+        .encode(
+            x=alt.X("weight_pct:Q", title="Weight %"),
+            y=alt.Y("label:N", sort="-x", title=None),
+            color=alt.Color("label:N", scale=alt.Scale(range=COLOR_RANGE), legend=None),
+            tooltip=[alt.Tooltip("label:N", title="Position"), alt.Tooltip("weight_pct:Q", title="Weight %", format=".2f")],
+        )
+        .properties(height=240)
+    )
+
+
+def performance_chart(chart_df: pd.DataFrame, metric_name: str) -> alt.Chart:
+    series_count = max(len(chart_df["series"].unique()), 1)
+    base = alt.Chart(chart_df).encode(
+        x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
+        y=alt.Y(f"{metric_name}:Q", title=metric_name.replace("_", " ").title()),
+        color=alt.Color(
+            "series:N",
+            legend=alt.Legend(orient="bottom", columns=min(4, series_count), labelLimit=240, symbolLimit=series_count),
+            scale=alt.Scale(range=COLOR_RANGE * 4),
+        ),
+        tooltip=[alt.Tooltip("series:N", title="Series"), alt.Tooltip("created_at:T", title="Time"), alt.Tooltip(f"{metric_name}:Q", title="Value", format=".4f")],
+    )
+    line = base.mark_line(strokeWidth=2.4)
+    points = base.mark_point(size=56, filled=True)
+    return (line + points).properties(height=520)
+
+
+def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter: str, selected_models: list[str]) -> alt.Chart | None:
+    frames: list[pd.DataFrame] = []
+    filtered_trades = trades_df.copy()
+    filtered_logs = logs_df.copy() if not logs_df.empty else pd.DataFrame()
+    if market_filter != "All":
+        filtered_trades = filtered_trades[filtered_trades["market_code"] == market_filter]
+        if not filtered_logs.empty:
+            filtered_logs = filtered_logs[filtered_logs["market_code"] == market_filter]
+    if selected_models:
+        filtered_trades = filtered_trades[filtered_trades["model_id"].isin(selected_models)]
+        if not filtered_logs.empty:
+            filtered_logs = filtered_logs[filtered_logs["model_id"].isin(selected_models)]
+
+    if not filtered_trades.empty:
+        trades = filtered_trades.copy()
+        trades["created_at"] = pd.to_datetime(trades["created_at"])
+        trades["bucket"] = trades["created_at"].dt.floor("h")
+        trades["trade_overhead"] = trades[["commission_amount", "tax_amount", "regulatory_fee_amount"]].fillna(0).sum(axis=1)
+        buy_sell = trades.groupby(["bucket", "side"], as_index=False)["gross_amount"].sum()
+        buy_sell["metric"] = buy_sell["side"].map({"BUY": "Buy notional", "SELL": "Sell notional"}).fillna(buy_sell["side"])
+        buy_sell = buy_sell.rename(columns={"bucket": "created_at", "gross_amount": "value"})[["created_at", "metric", "value"]]
+        frames.append(buy_sell)
+        fees = trades.groupby("bucket", as_index=False)["trade_overhead"].sum()
+        fees["metric"] = "Trade overhead"
+        fees = fees.rename(columns={"bucket": "created_at", "trade_overhead": "value"})[["created_at", "metric", "value"]]
+        frames.append(fees)
+    if not filtered_logs.empty:
+        logs = filtered_logs.copy()
+        logs["created_at"] = pd.to_datetime(logs["created_at"])
+        logs["bucket"] = logs["created_at"].dt.floor("h")
+        logs["estimated_cost_usd"] = pd.to_numeric(logs["estimated_cost_usd"], errors="coerce").fillna(0)
+        token_cost = logs.groupby("bucket", as_index=False)["estimated_cost_usd"].sum()
+        token_cost["metric"] = "LLM overhead"
+        token_cost = token_cost.rename(columns={"bucket": "created_at", "estimated_cost_usd": "value"})[["created_at", "metric", "value"]]
+        frames.append(token_cost)
+    if not frames:
+        return None
+    cost_df = pd.concat(frames, ignore_index=True)
+    return (
+        alt.Chart(cost_df)
+        .mark_line(point=True, strokeWidth=2.2)
+        .encode(
+            x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
+            y=alt.Y("value:Q", title="Flow / overhead"),
+            color=alt.Color("metric:N", scale=alt.Scale(range=COLOR_RANGE), legend=alt.Legend(orient="bottom", columns=2)),
+            tooltip=[alt.Tooltip("metric:N", title="Metric"), alt.Tooltip("created_at:T", title="Time"), alt.Tooltip("value:Q", title="Value", format=".4f")],
+        )
+        .properties(height=320)
+    )
+
+
 def render_podium_card(row: pd.Series, label: str, period_label: str, period_column: str) -> str:
     return f"""
     <div class=\"asa-podium\">
@@ -379,6 +488,7 @@ positions_df = pd.DataFrame(payload["positions"])
 trades_df = pd.DataFrame(payload["trades"])
 snapshots_df = pd.DataFrame(payload["snapshots"])
 news_batches = payload["news"]
+logs_all_df = pd.DataFrame(payload.get("logs", []))
 
 model_options = models_df["model_id"].tolist() if not models_df.empty else []
 default_models = models_df.loc[models_df["is_selected"], "model_id"].tolist() if not models_df.empty else []
@@ -390,8 +500,12 @@ if chosen_models:
     trades_df = trades_df[trades_df["model_id"].isin(chosen_models)]
     snapshots_df = snapshots_df[snapshots_df["model_id"].isin(chosen_models)]
     models_df = models_df[models_df["model_id"].isin(chosen_models)]
+    if not logs_all_df.empty:
+        logs_all_df = logs_all_df[logs_all_df["model_id"].isin(chosen_models)]
 
 render_hero(settings_payload, scheduler_payload, rankings_df)
+
+st.sidebar.markdown('<div class="asa-sidebar-footer">Made by eljja1@gmail.com</div>', unsafe_allow_html=True)
 
 scheduler_df = pd.DataFrame(scheduler_payload.get("markets", []))
 
@@ -453,8 +567,8 @@ with ranking_tab:
                 if allocation_df.empty:
                     column.caption("No current holdings")
                 else:
-                    column.caption("Hover to inspect current allocation")
-                    column.bar_chart(allocation_df.set_index("label"), height=220)
+                    column.caption("Current allocation")
+                    column.altair_chart(allocation_chart(allocation_df), use_container_width=True)
             else:
                 column.empty()
         st.markdown(' <div class="asa-section-label">Full Ranking</div> ' , unsafe_allow_html=True)
@@ -467,13 +581,26 @@ with ranking_tab:
 with performance_tab:
     st.markdown('<div class="asa-section-label">Trajectory</div>', unsafe_allow_html=True)
     metric_name = st.selectbox("Chart metric", ["total_return_pct", "total_equity"], index=0)
+    performance_market = st.selectbox("Performance market", ["All", "KR", "US"], index=0)
+    performance_models = st.multiselect("Legend models", chosen_models or model_options, default=(chosen_models or model_options)[:8])
     if snapshots_df.empty:
         st.info("No performance snapshots found.")
     else:
         chart_df = snapshots_df.copy()
-        chart_df["series"] = chart_df["model_id"] + " | " + chart_df["market_code"]
-        pivoted = chart_df.pivot_table(index="created_at", columns="series", values=metric_name, aggfunc="last").sort_index()
-        st.line_chart(pivoted)
+        if performance_market != "All":
+            chart_df = chart_df[chart_df["market_code"] == performance_market]
+        if performance_models:
+            chart_df = chart_df[chart_df["model_id"].isin(performance_models)]
+        if chart_df.empty:
+            st.caption("No performance rows match the current filters.")
+        else:
+            chart_df["created_at"] = pd.to_datetime(chart_df["created_at"])
+            chart_df["series"] = chart_df["model_id"] + " | " + chart_df["market_code"]
+            st.altair_chart(performance_chart(chart_df, metric_name), use_container_width=True)
+            overhead = overhead_chart(trades_df, logs_all_df, performance_market, performance_models)
+            if overhead is not None:
+                st.markdown("**Buy / Sell / Overhead**")
+                st.altair_chart(overhead, use_container_width=True)
 
 with news_tab:
     st.markdown('<div class="asa-section-label">Shared News</div>', unsafe_allow_html=True)
@@ -669,6 +796,25 @@ with admin_tab:
                 refresh_all()
                 st.rerun()
 
+        if not scheduler_df.empty:
+            st.markdown("**Scheduler status**")
+            st.dataframe(
+                scheduler_df[["market_code", "market_timezone", "window_label_utc", "in_active_window", "is_due", "last_status", "last_completed_at", "next_run_at"]].rename(
+                    columns={
+                        "market_code": "Market",
+                        "market_timezone": "Timezone",
+                        "window_label_utc": "Window (UTC)",
+                        "in_active_window": "In window",
+                        "is_due": "Due now",
+                        "last_status": "Last status",
+                        "last_completed_at": "Last completed",
+                        "next_run_at": "Next run",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
         st.caption("Destructive model deletion is no longer available in the dashboard. Use the admin API only if you need a permanent purge.")
 
         st.markdown("**Reset simulation**")
@@ -683,25 +829,3 @@ with admin_tab:
             refresh_all()
             st.rerun()
 
-if not scheduler_df.empty:
-    st.markdown("---")
-    st.markdown('<div class="asa-section-label">Scheduler Status</div>', unsafe_allow_html=True)
-    st.dataframe(
-        scheduler_df[["market_code", "market_timezone", "window_label_utc", "in_active_window", "is_due", "last_status", "last_completed_at", "next_run_at"]].rename(
-            columns={
-                "market_code": "Market",
-                "market_timezone": "Timezone",
-                "window_label_utc": "Window (UTC)",
-                "in_active_window": "In window",
-                "is_due": "Due now",
-                "last_status": "Last status",
-                "last_completed_at": "Last completed",
-                "next_run_at": "Next run",
-            }
-        ),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-st.markdown("---")
-st.caption("Made by eljja1@gmail.com")
