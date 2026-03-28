@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -21,6 +22,11 @@ from app.db.models import (
 from app.services.setup_helpers import ensure_model_market_state
 
 RUNTIME_SETTINGS_KEY = "runtime_controls"
+SCHEDULER_STATE_KEY = "scheduler_state"
+MARKET_TIMEZONES = {
+    "KR": "Asia/Seoul",
+    "US": "America/New_York",
+}
 
 DEFAULT_RUNTIME_SETTINGS = {
     "decision_interval_minutes": 60,
@@ -31,6 +37,13 @@ DEFAULT_RUNTIME_SETTINGS = {
     },
     "news_enabled": False,
     "news_mode": "shared_off",
+}
+
+DEFAULT_SCHEDULER_ENTRY = {
+    "last_started_at": None,
+    "last_completed_at": None,
+    "last_status": None,
+    "last_message": None,
 }
 
 
@@ -57,6 +70,116 @@ def update_runtime_settings(session: Session, payload: dict) -> dict:
         setting.updated_at = datetime.now(UTC)
     session.flush()
     return merged
+
+
+def get_scheduler_state(session: Session) -> dict:
+    runtime_settings = get_runtime_settings(session)
+    market_codes = list(runtime_settings.get("markets", {}).keys())
+    setting = session.scalar(select(AdminSetting).where(AdminSetting.key == SCHEDULER_STATE_KEY))
+    if setting is None:
+        state = {"markets": {code: DEFAULT_SCHEDULER_ENTRY.copy() for code in market_codes}}
+        setting = AdminSetting(key=SCHEDULER_STATE_KEY, value_json=state)
+        session.add(setting)
+        session.flush()
+        return state
+
+    state = {"markets": {**(setting.value_json or {}).get("markets", {})}}
+    changed = False
+    for code in market_codes:
+        if code not in state["markets"]:
+            state["markets"][code] = DEFAULT_SCHEDULER_ENTRY.copy()
+            changed = True
+    for code in list(state["markets"].keys()):
+        if code not in market_codes:
+            del state["markets"][code]
+            changed = True
+    if changed:
+        setting.value_json = state
+        setting.updated_at = datetime.now(UTC)
+        session.flush()
+    return state
+
+
+def update_market_scheduler_state(
+    session: Session,
+    market_code: str,
+    *,
+    last_started_at: datetime | None = None,
+    last_completed_at: datetime | None = None,
+    last_status: str | None = None,
+    last_message: str | None = None,
+) -> dict:
+    state = get_scheduler_state(session)
+    markets = state.setdefault("markets", {})
+    entry = {**DEFAULT_SCHEDULER_ENTRY, **markets.get(market_code, {})}
+    if last_started_at is not None:
+        entry["last_started_at"] = _serialize_datetime(last_started_at)
+    if last_completed_at is not None:
+        entry["last_completed_at"] = _serialize_datetime(last_completed_at)
+    if last_status is not None:
+        entry["last_status"] = last_status
+    if last_message is not None:
+        entry["last_message"] = last_message
+    markets[market_code] = entry
+
+    setting = session.scalar(select(AdminSetting).where(AdminSetting.key == SCHEDULER_STATE_KEY))
+    if setting is None:
+        setting = AdminSetting(key=SCHEDULER_STATE_KEY, value_json=state)
+        session.add(setting)
+    else:
+        setting.value_json = state
+        setting.updated_at = datetime.now(UTC)
+    session.flush()
+    return entry
+
+
+def get_scheduler_status(session: Session, now: datetime | None = None) -> dict:
+    current_utc = now.astimezone(UTC) if now is not None else datetime.now(UTC)
+    runtime_settings = get_runtime_settings(session)
+    state = get_scheduler_state(session)
+    cadence_minutes = int(runtime_settings.get("decision_interval_minutes", 60))
+    active_weekdays = runtime_settings.get("active_weekdays", [0, 1, 2, 3, 4])
+
+    markets_payload = []
+    for market_code, config in runtime_settings.get("markets", {}).items():
+        timezone_name = MARKET_TIMEZONES.get(market_code, "UTC")
+        timezone = ZoneInfo(timezone_name)
+        local_now = current_utc.astimezone(timezone)
+        enabled = bool(config.get("enabled", True))
+        entry = {**DEFAULT_SCHEDULER_ENTRY, **state.get("markets", {}).get(market_code, {})}
+        last_started_at = _deserialize_datetime(entry.get("last_started_at"))
+        last_completed_at = _deserialize_datetime(entry.get("last_completed_at"))
+        in_active_window = enabled and _is_market_active(local_now, config, active_weekdays)
+        cadence_delta = timedelta(minutes=cadence_minutes)
+        is_due = in_active_window and (last_started_at is None or current_utc >= (last_started_at + cadence_delta))
+        next_run_at = _compute_next_run(
+            now_utc=current_utc,
+            timezone=timezone,
+            config=config,
+            active_weekdays=active_weekdays,
+            cadence_delta=cadence_delta,
+            last_started_at=last_started_at,
+        )
+        markets_payload.append(
+            {
+                "market_code": market_code,
+                "market_timezone": timezone_name,
+                "enabled": enabled,
+                "in_active_window": in_active_window,
+                "is_due": is_due,
+                "last_started_at": last_started_at,
+                "last_completed_at": last_completed_at,
+                "last_status": entry.get("last_status"),
+                "last_message": entry.get("last_message"),
+                "next_run_at": next_run_at,
+            }
+        )
+
+    return {
+        "cadence_minutes": cadence_minutes,
+        "active_weekdays": active_weekdays,
+        "markets": markets_payload,
+    }
 
 
 def reset_simulation(session: Session, reset_prompts: bool = True) -> dict[str, int]:
@@ -101,6 +224,16 @@ def reset_simulation(session: Session, reset_prompts: bool = True) -> dict[str, 
                 market_code=market_code,
                 display_name=model.display_name,
             )
+
+    for market_code in enabled_markets:
+        update_market_scheduler_state(
+            session,
+            market_code,
+            last_started_at=datetime.now(UTC),
+            last_completed_at=datetime.now(UTC),
+            last_status="reset",
+            last_message="Simulation data reset by admin.",
+        )
 
     session.flush()
     return {
@@ -179,3 +312,73 @@ def _pricing_label(prompt_price_per_million: float | None, completion_price_per_
     if prompt_price_per_million is None or completion_price_per_million is None:
         return "pricing unavailable"
     return f"input=${prompt_price_per_million:.4f}/1M, output=${completion_price_per_million:.4f}/1M"
+
+
+def _serialize_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(UTC).isoformat()
+
+
+def _deserialize_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _parse_hhmm(value: str) -> time:
+    hour_text, minute_text = value.split(":", maxsplit=1)
+    return time(hour=int(hour_text), minute=int(minute_text))
+
+
+def _time_in_window(current_time: time, start_time: time, end_time: time) -> bool:
+    if start_time <= end_time:
+        return start_time <= current_time <= end_time
+    return current_time >= start_time or current_time <= end_time
+
+
+def _is_market_active(local_now: datetime, config: dict, active_weekdays: list[int]) -> bool:
+    if local_now.weekday() not in active_weekdays:
+        return False
+    start_time = _parse_hhmm(config.get("window_start", "00:00"))
+    end_time = _parse_hhmm(config.get("window_end", "23:59"))
+    return _time_in_window(local_now.timetz().replace(tzinfo=None), start_time, end_time)
+
+
+def _compute_next_run(
+    now_utc: datetime,
+    timezone: ZoneInfo,
+    config: dict,
+    active_weekdays: list[int],
+    cadence_delta: timedelta,
+    last_started_at: datetime | None,
+) -> datetime | None:
+    if not config.get("enabled", True) or not active_weekdays:
+        return None
+
+    local_now = now_utc.astimezone(timezone)
+    start_time = _parse_hhmm(config.get("window_start", "00:00"))
+    end_time = _parse_hhmm(config.get("window_end", "23:59"))
+    today = local_now.date()
+
+    if local_now.weekday() in active_weekdays:
+        today_start = datetime.combine(today, start_time, tzinfo=timezone)
+        if local_now.timetz().replace(tzinfo=None) < start_time:
+            return today_start.astimezone(UTC)
+        if _time_in_window(local_now.timetz().replace(tzinfo=None), start_time, end_time):
+            if last_started_at is None or now_utc >= last_started_at + cadence_delta:
+                return now_utc
+            candidate = last_started_at + cadence_delta
+            candidate_local = candidate.astimezone(timezone)
+            if candidate_local.date() == today and _time_in_window(candidate_local.timetz().replace(tzinfo=None), start_time, end_time):
+                return candidate.astimezone(UTC)
+
+    for day_offset in range(1, 15):
+        next_day = today + timedelta(days=day_offset)
+        if next_day.weekday() not in active_weekdays:
+            continue
+        return datetime.combine(next_day, start_time, tzinfo=timezone).astimezone(UTC)
+    return None

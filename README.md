@@ -7,9 +7,10 @@ AI Stock Arena is a virtual trading benchmark for comparing how different LLMs b
 - OpenRouter model synchronization and bootstrap flow
 - Market settings for unified `KR` and `US` portfolios
 - Hourly-style market screening based on recent price action
+- Runtime scheduler based on admin-controlled cadence and market windows
 - Virtual trade execution with market-specific costs
-- Portfolio, position, trade, and performance snapshot persistence
-- CLI entry points for bootstrap, model catalog inspection, market screening, demo execution, and LLM-driven cycles
+- Portfolio, position, trade, performance snapshot, and LLM decision log persistence
+- CLI entry points for bootstrap, model catalog inspection, market screening, demo execution, scheduler execution, and LLM-driven cycles
 
 ## Repository Layout
 
@@ -35,6 +36,9 @@ copy .env.example .env
 .\.venv\Scripts\python.exe -m app.cli.market demo-cycle US --model-id demo/manual-strategy --picks 2
 .\.venv\Scripts\python.exe -m app.cli.llm generate-prompt US openai/gpt-4o-mini
 .\.venv\Scripts\python.exe -m app.cli.llm run-cycle US openai/gpt-4o-mini --candidate-limit 12
+.\.venv\Scripts\python.exe -m app.cli.scheduler status
+.\.venv\Scripts\python.exe -m app.cli.scheduler run-once
+.\.venv\Scripts\python.exe -m app.cli.scheduler serve
 .\.venv\Scripts\python.exe -m uvicorn app.api.main:app --reload
 .\.venv\Scripts\python.exe -m streamlit run src\app\dashboard\main.py
 ```
@@ -45,9 +49,5 @@ copy .env.example .env
 - OpenRouter free variants and zero-token-cost models can be listed through the model catalog CLI.
 - `yfinance` is currently used for prototype market data collection.
 - The current universe is a curated starter set, not the full exchange universe yet.
-- The FastAPI layer is read-only for dashboard and debugging use.
 - Streamlit can read data directly from the database or from `API_BASE_URL` if set.
-- Oracle deployment and automated scheduler are still pending.
-
-
-
+- Oracle deployment is still pending.

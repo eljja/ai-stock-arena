@@ -19,6 +19,7 @@ from app.api.schemas import (
     PortfolioSummary,
     PositionSummary,
     RuntimeSettingsResponse,
+    SchedulerStatusResponse,
     SnapshotSummary,
     TradeSummary,
 )
@@ -33,7 +34,7 @@ from app.db.models import (
     SharedNewsItem,
     Trade,
 )
-from app.services.admin import get_runtime_settings
+from app.services.admin import get_runtime_settings, get_scheduler_status
 
 
 def get_overview(
@@ -403,6 +404,11 @@ def get_runtime_settings_response(session: Session) -> RuntimeSettingsResponse:
     return RuntimeSettingsResponse(**settings)
 
 
+def get_scheduler_status_response(session: Session) -> SchedulerStatusResponse:
+    status = get_scheduler_status(session)
+    return SchedulerStatusResponse(**status)
+
+
 def _serialize_model(model: LLMModel) -> ModelSummary:
     metadata = model.metadata_json or {}
     return ModelSummary(
@@ -566,3 +572,5 @@ def _pct(current_value: float, basis_value: float) -> float:
     if not basis_value:
         return 0.0
     return ((current_value - basis_value) / basis_value) * 100
+
+

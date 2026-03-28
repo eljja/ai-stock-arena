@@ -139,6 +139,25 @@ class RuntimeSettingsResponse(BaseModel):
     news_mode: str
 
 
+class MarketSchedulerStatus(BaseModel):
+    market_code: str
+    market_timezone: str
+    enabled: bool
+    in_active_window: bool
+    is_due: bool
+    last_started_at: datetime | None
+    last_completed_at: datetime | None
+    last_status: str | None
+    last_message: str | None
+    next_run_at: datetime | None
+
+
+class SchedulerStatusResponse(BaseModel):
+    cadence_minutes: int
+    active_weekdays: list[int]
+    markets: list[MarketSchedulerStatus]
+
+
 class RuntimeSettingsUpdate(BaseModel):
     decision_interval_minutes: int | None = None
     active_weekdays: list[int] | None = None

@@ -35,6 +35,7 @@ ai-stock-arena-bootstrap = "app.cli.bootstrap:run"
 ai-stock-arena-market = "app.cli.market:run_screen"
 ai-stock-arena-llm = "app.cli.llm:run_llm"
 ai-stock-arena-models = "app.cli.models:run_models"
+ai-stock-arena-scheduler = "app.cli.scheduler:run_scheduler_cli"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

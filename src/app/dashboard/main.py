@@ -15,6 +15,7 @@ import streamlit as st
 from app.api.query_service import (
     get_overview,
     get_runtime_settings_response,
+    get_scheduler_status_response,
     list_llm_logs,
     list_models,
     list_news_batches,
@@ -56,6 +57,7 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             return {
                 "overview": client.get("/overview", params={"selected_only": str(selected_only).lower()}).json(),
                 "settings": client.get("/runtime-settings").json(),
+                "scheduler": client.get("/scheduler-status").json(),
                 "models": client.get("/models", params={"selected_only": "false"}).json(),
                 "rankings": client.get("/rankings", params={"selected_only": str(selected_only).lower()}).json(),
                 "portfolios": client.get("/portfolios", params={"selected_only": str(selected_only).lower()}).json(),
@@ -69,6 +71,7 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
         return {
             "overview": get_overview(session=session, selected_only=selected_only).model_dump(mode="json"),
             "settings": get_runtime_settings_response(session=session).model_dump(mode="json"),
+            "scheduler": get_scheduler_status_response(session=session).model_dump(mode="json"),
             "models": [item.model_dump(mode="json") for item in list_models(session=session, selected_only=False)],
             "rankings": [item.model_dump(mode="json") for item in list_rankings(session=session, selected_only=selected_only)],
             "portfolios": [item.model_dump(mode="json") for item in list_portfolios(session=session, selected_only=selected_only)],
@@ -140,6 +143,7 @@ settings_payload = payload["settings"] or {
     "news_enabled": False,
     "news_mode": "shared_off",
 }
+scheduler_payload = payload.get("scheduler") or {"markets": []}
 
 models_df = pd.DataFrame(payload["models"])
 rankings_df = pd.DataFrame(payload["rankings"])
@@ -175,6 +179,41 @@ metric_cols[0].metric("Selected models", overview["selected_model_count"])
 metric_cols[1].metric("Visible portfolios", overview["portfolio_count"])
 metric_cols[2].metric("Combined equity", _money(overview["combined_total_equity"]))
 metric_cols[3].metric("Combined return", _pct(overview["combined_return_pct"]))
+
+scheduler_df = pd.DataFrame(scheduler_payload.get("markets", []))
+if not scheduler_df.empty:
+    st.markdown("**Scheduler status**")
+    st.dataframe(
+        scheduler_df[
+            [
+                "market_code",
+                "market_timezone",
+                "enabled",
+                "in_active_window",
+                "is_due",
+                "last_status",
+                "last_message",
+                "last_started_at",
+                "last_completed_at",
+                "next_run_at",
+            ]
+        ].rename(
+            columns={
+                "market_code": "Market",
+                "market_timezone": "Timezone",
+                "enabled": "Enabled",
+                "in_active_window": "In window",
+                "is_due": "Due now",
+                "last_status": "Last status",
+                "last_message": "Last message",
+                "last_started_at": "Last started",
+                "last_completed_at": "Last completed",
+                "next_run_at": "Next run",
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
 
 ranking_tab, performance_tab, news_tab, detail_tab, admin_tab = st.tabs(
     ["Ranking", "Performance", "Shared News", "Model Detail", "Admin"]
@@ -412,4 +451,3 @@ with admin_tab:
                     session.commit()
             refresh_all()
             st.rerun()
-

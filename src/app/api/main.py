@@ -8,6 +8,7 @@ from app.api.query_service import (
     get_copy_trade,
     get_overview,
     get_runtime_settings_response,
+    get_scheduler_status_response,
     list_llm_logs,
     list_models,
     list_news_batches,
@@ -31,6 +32,7 @@ from app.api.schemas import (
     ResetResponse,
     RuntimeSettingsResponse,
     RuntimeSettingsUpdate,
+    SchedulerStatusResponse,
     SnapshotSummary,
     TradeSummary,
 )
@@ -76,6 +78,11 @@ def health() -> HealthResponse:
 @app.get("/runtime-settings", response_model=RuntimeSettingsResponse)
 def runtime_settings(session: Session = Depends(get_session)) -> RuntimeSettingsResponse:
     return get_runtime_settings_response(session=session)
+
+
+@app.get("/scheduler-status", response_model=SchedulerStatusResponse)
+def scheduler_status(session: Session = Depends(get_session)) -> SchedulerStatusResponse:
+    return get_scheduler_status_response(session=session)
 
 
 @app.get("/overview", response_model=OverviewResponse)
