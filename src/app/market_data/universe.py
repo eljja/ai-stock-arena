@@ -1,7 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 UNIVERSE_BY_MARKET: dict[str, dict[str, str]] = {
-    "KOSPI": {
+    "KR": {
         "005930.KS": "Samsung Electronics",
         "000660.KS": "SK hynix",
         "035420.KS": "NAVER",
@@ -11,23 +11,21 @@ UNIVERSE_BY_MARKET: dict[str, dict[str, str]] = {
         "068270.KS": "Celltrion",
         "105560.KS": "KB Financial Group",
         "055550.KS": "Shinhan Financial Group",
-        "034730.KS": "SK",
+        "034730.KS": "SK Inc.",
         "003670.KS": "POSCO Holdings",
         "017670.KS": "SK Telecom",
-    },
-    "KOSDAQ": {
         "247540.KQ": "EcoPro BM",
-        "086520.KQ": "ECOPRO",
+        "086520.KQ": "Ecopro",
         "091990.KQ": "Celltrion Healthcare",
         "196170.KQ": "Alteogen",
         "066970.KQ": "L&F",
         "140860.KQ": "Park Systems",
-        "263750.KQ": "펄어비스",
-        "293490.KQ": "카카오게임즈",
-        "278280.KQ": "천보",
-        "058470.KQ": "리노공업",
-        "214150.KQ": "클래시스",
-        "357780.KQ": "솔브레인",
+        "263750.KQ": "Pearl Abyss",
+        "293490.KQ": "Kakao Games",
+        "278280.KQ": "Chunbo",
+        "058470.KQ": "Leeno Industrial",
+        "214150.KQ": "Classys",
+        "357780.KQ": "Soulbrain",
     },
     "US": {
         "AAPL": "Apple",

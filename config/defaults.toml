@@ -4,15 +4,7 @@ timezone = "Asia/Seoul"
 decision_interval_minutes = 60
 max_positions_per_market = 10
 
-[markets.KOSPI]
-enabled = true
-currency = "KRW"
-initial_cash = 10000000
-buy_commission_rate = 0.00015
-sell_commission_rate = 0.00015
-sell_tax_rate = 0.00200
-
-[markets.KOSDAQ]
+[markets.KR]
 enabled = true
 currency = "KRW"
 initial_cash = 10000000

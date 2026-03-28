@@ -20,7 +20,7 @@ settings = load_settings()
 
 st.set_page_config(page_title="AI Stock Arena", layout="wide")
 st.title("AI Stock Arena")
-st.caption("Selected models, pricing, and virtual portfolio state.")
+st.caption("Model-first comparison for virtual trading performance.")
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -91,7 +91,7 @@ api_base_url = st.sidebar.text_input(
     placeholder="http://127.0.0.1:8000",
 )
 selected_only = st.sidebar.checkbox("Selected models only", value=True)
-market_label = st.sidebar.selectbox("Market", ["All", "KOSPI", "KOSDAQ", "US"], index=0)
+market_label = st.sidebar.selectbox("Market", ["All", "KR", "US"], index=0)
 market_code = None if market_label == "All" else market_label
 
 if st.sidebar.button("Refresh"):
@@ -134,6 +134,61 @@ metric_columns[0].metric("Visible models", len(models_df.index), overview["selec
 metric_columns[1].metric("Visible portfolios", len(portfolios_df.index), overview["portfolio_count"])
 metric_columns[2].metric("Combined equity", _money(combined_total_equity))
 metric_columns[3].metric("Combined return", f"{filtered_return_pct:.2f}%")
+
+st.subheader("Model comparison")
+if portfolios_df.empty or models_df.empty:
+    st.info("No model comparison data available for the current filter.")
+else:
+    comparison_df = portfolios_df.groupby("model_id", as_index=False).agg(
+        initial_cash=("initial_cash", "sum"),
+        available_cash=("available_cash", "sum"),
+        invested_value=("invested_value", "sum"),
+        total_equity=("total_equity", "sum"),
+        total_realized_pnl=("total_realized_pnl", "sum"),
+        total_unrealized_pnl=("total_unrealized_pnl", "sum"),
+        position_count=("position_count", "sum"),
+        market_count=("market_code", "nunique"),
+    )
+    comparison_df["return_pct"] = comparison_df.apply(
+        lambda row: ((row["total_equity"] - row["initial_cash"]) / row["initial_cash"] * 100) if row["initial_cash"] else 0.0,
+        axis=1,
+    )
+    model_flags = models_df[["model_id", "is_free_like", "is_selected", "pricing_label"]].drop_duplicates()
+    comparison_df = comparison_df.merge(model_flags, on="model_id", how="left")
+    comparison_df = comparison_df.sort_values(["return_pct", "total_equity"], ascending=[False, False])
+    comparison_df.index = range(1, len(comparison_df) + 1)
+    st.dataframe(
+        comparison_df[
+            [
+                "model_id",
+                "is_free_like",
+                "is_selected",
+                "market_count",
+                "position_count",
+                "initial_cash",
+                "total_equity",
+                "total_realized_pnl",
+                "total_unrealized_pnl",
+                "return_pct",
+                "pricing_label",
+            ]
+        ].rename(
+            columns={
+                "model_id": "Model ID",
+                "is_free_like": "Free",
+                "is_selected": "Selected",
+                "market_count": "Markets",
+                "position_count": "Positions",
+                "initial_cash": "Initial cash",
+                "total_equity": "Total equity",
+                "total_realized_pnl": "Realized PnL",
+                "total_unrealized_pnl": "Unrealized PnL",
+                "return_pct": "Return %",
+                "pricing_label": "Pricing",
+            }
+        ),
+        use_container_width=True,
+    )
 
 st.subheader("Model catalog")
 if models_df.empty:

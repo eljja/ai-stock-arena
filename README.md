@@ -1,11 +1,11 @@
-﻿# AI Stock Arena
+# AI Stock Arena
 
 AI Stock Arena is a virtual trading benchmark for comparing how different LLMs behave under the same market constraints.
 
 ## Current Scope
 
 - OpenRouter model synchronization and bootstrap flow
-- Market settings for `KOSPI`, `KOSDAQ`, and `US`
+- Market settings for unified `KR` and `US` portfolios
 - Hourly-style market screening based on recent price action
 - Virtual trade execution with market-specific costs
 - Portfolio, position, trade, and performance snapshot persistence
@@ -48,5 +48,6 @@ copy .env.example .env
 - The FastAPI layer is read-only for dashboard and debugging use.
 - Streamlit can read data directly from the database or from `API_BASE_URL` if set.
 - Oracle deployment and automated scheduler are still pending.
+
 
 

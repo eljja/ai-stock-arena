@@ -22,14 +22,15 @@ def get_overview(
     market_code: str | None = None,
     selected_only: bool = False,
 ) -> OverviewResponse:
+    enabled_market_codes = _enabled_market_codes(session, market_code)
     models = list_models(session=session, selected_only=selected_only)
     portfolios = list_portfolios(session=session, market_code=market_code, selected_only=selected_only)
 
     latest_trade_stmt = select(func.max(Trade.created_at))
     latest_snapshot_stmt = select(func.max(PerformanceSnapshot.created_at))
-    if market_code:
-        latest_trade_stmt = latest_trade_stmt.where(Trade.market_code == market_code)
-        latest_snapshot_stmt = latest_snapshot_stmt.where(PerformanceSnapshot.market_code == market_code)
+    if enabled_market_codes:
+        latest_trade_stmt = latest_trade_stmt.where(Trade.market_code.in_(enabled_market_codes))
+        latest_snapshot_stmt = latest_snapshot_stmt.where(PerformanceSnapshot.market_code.in_(enabled_market_codes))
     if selected_only:
         latest_trade_stmt = latest_trade_stmt.join(LLMModel, LLMModel.model_id == Trade.model_id).where(
             LLMModel.is_selected.is_(True)
@@ -83,13 +84,14 @@ def list_portfolios(
     market_code: str | None = None,
     selected_only: bool = False,
 ) -> list[PortfolioSummary]:
+    enabled_market_codes = _enabled_market_codes(session, market_code)
     markets = _market_map(session)
-    position_counts = _position_counts(session)
-    snapshot_times = _latest_snapshot_times(session)
+    position_counts = _position_counts(session, enabled_market_codes)
+    snapshot_times = _latest_snapshot_times(session, enabled_market_codes)
 
     stmt = select(Portfolio).order_by(Portfolio.market_code.asc(), Portfolio.total_equity.desc())
-    if market_code:
-        stmt = stmt.where(Portfolio.market_code == market_code)
+    if enabled_market_codes:
+        stmt = stmt.where(Portfolio.market_code.in_(enabled_market_codes))
     if selected_only:
         stmt = stmt.join(LLMModel, LLMModel.model_id == Portfolio.model_id).where(LLMModel.is_selected.is_(True))
 
@@ -121,13 +123,14 @@ def list_positions(
     model_id: str | None = None,
     selected_only: bool = False,
 ) -> list[PositionSummary]:
+    enabled_market_codes = _enabled_market_codes(session, market_code)
     stmt = select(Position).order_by(
         Position.market_code.asc(),
         Position.model_id.asc(),
         Position.market_value.desc(),
     )
-    if market_code:
-        stmt = stmt.where(Position.market_code == market_code)
+    if enabled_market_codes:
+        stmt = stmt.where(Position.market_code.in_(enabled_market_codes))
     if model_id:
         stmt = stmt.where(Position.model_id == model_id)
     if selected_only:
@@ -160,15 +163,16 @@ def list_trades(
     selected_only: bool = False,
     limit: int = 100,
 ) -> list[TradeSummary]:
-    stmt = select(Trade).order_by(Trade.created_at.desc(), Trade.id.desc()).limit(limit)
-    if market_code:
-        stmt = stmt.where(Trade.market_code == market_code)
+    enabled_market_codes = _enabled_market_codes(session, market_code)
+    stmt = select(Trade).order_by(Trade.created_at.desc(), Trade.id.desc())
+    if enabled_market_codes:
+        stmt = stmt.where(Trade.market_code.in_(enabled_market_codes))
     if model_id:
         stmt = stmt.where(Trade.model_id == model_id)
     if selected_only:
         stmt = stmt.join(LLMModel, LLMModel.model_id == Trade.model_id).where(LLMModel.is_selected.is_(True))
 
-    trades = session.scalars(stmt).all()
+    trades = session.scalars(stmt.limit(limit)).all()
     return [
         TradeSummary(
             id=trade.id,
@@ -199,12 +203,13 @@ def list_snapshots(
     selected_only: bool = False,
     limit: int = 300,
 ) -> list[SnapshotSummary]:
+    enabled_market_codes = _enabled_market_codes(session, market_code)
     stmt = select(PerformanceSnapshot).order_by(
         PerformanceSnapshot.created_at.desc(),
         PerformanceSnapshot.id.desc(),
-    ).limit(limit)
-    if market_code:
-        stmt = stmt.where(PerformanceSnapshot.market_code == market_code)
+    )
+    if enabled_market_codes:
+        stmt = stmt.where(PerformanceSnapshot.market_code.in_(enabled_market_codes))
     if model_id:
         stmt = stmt.where(PerformanceSnapshot.model_id == model_id)
     if selected_only:
@@ -213,7 +218,7 @@ def list_snapshots(
             LLMModel.model_id == PerformanceSnapshot.model_id,
         ).where(LLMModel.is_selected.is_(True))
 
-    snapshots = list(reversed(session.scalars(stmt).all()))
+    snapshots = list(reversed(session.scalars(stmt.limit(limit)).all()))
     return [
         SnapshotSummary(
             model_id=snapshot.model_id,
@@ -271,27 +276,37 @@ def _infer_is_free_like(model: LLMModel) -> bool:
 
 
 def _market_map(session: Session) -> dict[str, str]:
-    markets = session.scalars(select(MarketSetting)).all()
+    markets = session.scalars(select(MarketSetting).where(MarketSetting.enabled.is_(True))).all()
     return {market.market_code: market.market_name for market in markets}
 
 
-def _position_counts(session: Session) -> dict[tuple[str, str], int]:
+def _enabled_market_codes(session: Session, market_code: str | None = None) -> list[str]:
+    stmt = select(MarketSetting.market_code).where(MarketSetting.enabled.is_(True))
+    if market_code:
+        stmt = stmt.where(MarketSetting.market_code == market_code)
+    return list(session.scalars(stmt).all())
+
+
+def _position_counts(session: Session, enabled_market_codes: list[str]) -> dict[tuple[str, str], int]:
+    stmt = select(Position.model_id, Position.market_code, func.count(Position.id))
+    if enabled_market_codes:
+        stmt = stmt.where(Position.market_code.in_(enabled_market_codes))
     rows: Iterable[tuple[str, str, int]] = session.execute(
-        select(Position.model_id, Position.market_code, func.count(Position.id)).group_by(
-            Position.model_id,
-            Position.market_code,
-        )
+        stmt.group_by(Position.model_id, Position.market_code)
     ).all()
     return {(model_id, market_code): count for model_id, market_code, count in rows}
 
 
-def _latest_snapshot_times(session: Session) -> dict[tuple[str, str], datetime]:
+def _latest_snapshot_times(session: Session, enabled_market_codes: list[str]) -> dict[tuple[str, str], datetime]:
+    stmt = select(
+        PerformanceSnapshot.model_id,
+        PerformanceSnapshot.market_code,
+        func.max(PerformanceSnapshot.created_at),
+    )
+    if enabled_market_codes:
+        stmt = stmt.where(PerformanceSnapshot.market_code.in_(enabled_market_codes))
     rows = session.execute(
-        select(
-            PerformanceSnapshot.model_id,
-            PerformanceSnapshot.market_code,
-            func.max(PerformanceSnapshot.created_at),
-        ).group_by(PerformanceSnapshot.model_id, PerformanceSnapshot.market_code)
+        stmt.group_by(PerformanceSnapshot.model_id, PerformanceSnapshot.market_code)
     ).all()
     return {(model_id, market_code): created_at for model_id, market_code, created_at in rows}
 

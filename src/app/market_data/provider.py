@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pandas as pd
 import yfinance as yf
@@ -10,8 +11,7 @@ from app.market_data.models import MarketSnapshot, PriceSnapshot
 from app.market_data.universe import UNIVERSE_BY_MARKET
 
 MARKET_CURRENCY = {
-    "KOSPI": "KRW",
-    "KOSDAQ": "KRW",
+    "KR": "KRW",
     "US": "USD",
 }
 
@@ -19,6 +19,9 @@ MARKET_CURRENCY = {
 class YahooMarketDataProvider:
     def __init__(self) -> None:
         self.runtime_config = load_runtime_config()
+        cache_dir = Path(".cache") / "yfinance"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        yf.set_tz_cache_location(str(cache_dir.resolve()))
 
     def fetch_market_snapshot(self, market_code: str) -> MarketSnapshot:
         universe = UNIVERSE_BY_MARKET.get(market_code)
@@ -33,7 +36,7 @@ class YahooMarketDataProvider:
             auto_adjust=False,
             group_by="ticker",
             progress=False,
-            threads=True,
+            threads=False,
         )
         if frame.empty:
             raise RuntimeError(f"No market data returned for {market_code}")

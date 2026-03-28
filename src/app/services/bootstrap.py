@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 
@@ -12,8 +12,7 @@ from app.db.session import engine
 from app.llm.openrouter import OpenRouterClient, OpenRouterModel
 
 MARKET_LABELS = {
-    "KOSPI": "Korea Composite Stock Price Index",
-    "KOSDAQ": "Korea Securities Dealers Automated Quotations",
+    "KR": "Korea Equity Market",
     "US": "United States Equity Market",
 }
 
@@ -48,6 +47,7 @@ def bootstrap_database(session: Session, sync_openrouter_models: bool = True) ->
         synced_models = sync_models_from_openrouter(session, selected_model_ids)
 
     market_settings_upserted = upsert_market_settings(session, runtime_config.app.max_positions_per_market)
+    session.flush()
     portfolios_created, prompt_placeholders_created = initialize_selected_model_state(session)
     selected_models = count_selected_models(session)
 
@@ -92,6 +92,7 @@ def probe_and_select_free_models(
         record.metadata_json = {
             **(record.metadata_json or {}),
             "probe": {"success": success, "detail": detail},
+            "probe_detail": detail,
             "is_free_like": external_model.is_free_like,
         }
         if success and selected_count < target_count:
@@ -139,6 +140,12 @@ def upsert_openrouter_model(
 
 def upsert_market_settings(session: Session, max_positions: int) -> int:
     runtime_config = load_runtime_config()
+    configured_market_codes = set(runtime_config.markets.keys())
+
+    for existing in session.scalars(select(MarketSetting)).all():
+        if existing.market_code not in configured_market_codes:
+            existing.enabled = False
+
     upserted = 0
     for market_code, market_config in runtime_config.markets.items():
         existing = session.scalar(select(MarketSetting).where(MarketSetting.market_code == market_code))
@@ -227,3 +234,4 @@ def _default_meta_prompt(market_code: str) -> str:
         "context, keep the portfolio under 10 positions, and account for market-specific fees and taxes. "
         "Return a production-ready prompt that will later be used for hourly virtual trading decisions."
     )
+

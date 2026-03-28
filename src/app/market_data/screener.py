@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from app.config.loader import load_runtime_config
 from app.market_data.models import Candidate, MarketSnapshot
