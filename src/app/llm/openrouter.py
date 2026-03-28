@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -99,7 +100,6 @@ class OpenRouterClient:
         elif sort_by == "name":
             models.sort(key=lambda model: model.display_name.lower())
         elif sort_by == "popular":
-            # Official /models responses do not document popularity ordering.
             pass
         return models
 
@@ -144,22 +144,47 @@ class OpenRouterClient:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
 
-        response = httpx.post(
-            f"{BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model_id,
-                "messages": messages,
-                "temperature": temperature,
-            },
-            timeout=self.timeout_seconds,
+        response = self._post_with_retry(
+            model_id=model_id,
+            messages=messages,
+            temperature=temperature,
         )
-        response.raise_for_status()
         payload = response.json()
         return payload["choices"][0]["message"]["content"]
+
+    def _post_with_retry(
+        self,
+        model_id: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_attempts: int = 4,
+    ) -> httpx.Response:
+        last_error: httpx.HTTPStatusError | None = None
+        for attempt in range(max_attempts):
+            response = httpx.post(
+                f"{BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model_id,
+                    "messages": messages,
+                    "temperature": temperature,
+                },
+                timeout=self.timeout_seconds,
+            )
+            try:
+                response.raise_for_status()
+                return response
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                if exc.response.status_code != 429 or attempt == max_attempts - 1:
+                    raise
+                time.sleep(2 * (attempt + 1))
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("OpenRouter request failed without an HTTP response.")
 
     def _ensure_api_key(self) -> None:
         if not self.api_key:

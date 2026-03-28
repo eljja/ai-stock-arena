@@ -6,7 +6,12 @@ from sqlalchemy.orm import Session
 from app.db.models import LLMModel, MarketSetting, ModelMarketPrompt, Portfolio
 
 
-def ensure_model_market_state(session: Session, model_id: str, market_code: str, display_name: str | None = None) -> None:
+def ensure_model_market_state(
+    session: Session,
+    model_id: str,
+    market_code: str,
+    display_name: str | None = None,
+) -> None:
     model = session.scalar(select(LLMModel).where(LLMModel.model_id == model_id))
     if model is None:
         model = LLMModel(
@@ -57,8 +62,8 @@ def ensure_model_market_state(session: Session, model_id: str, market_code: str,
                 model_id=model_id,
                 market_code=market_code,
                 version=1,
-                prompt_content="MANUAL_DEMO",
-                source_meta_prompt="Manual demo cycle without LLM decisioning.",
+                prompt_content="PENDING_GENERATION",
+                source_meta_prompt="Pending model-specific prompt generation.",
                 is_active=True,
             )
         )
