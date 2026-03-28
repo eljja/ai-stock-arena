@@ -1,0 +1,18 @@
+[Unit]
+Description=AI Stock Arena Streamlit dashboard
+After=network.target ai-stock-arena-api.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/ai-stock-arena/current
+EnvironmentFile=/etc/ai-stock-arena/ai-stock-arena.env
+ExecStart=/usr/bin/env bash /opt/ai-stock-arena/current/scripts/linux/run-dashboard.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/ai-stock-arena/dashboard.log
+StandardError=append:/var/log/ai-stock-arena/dashboard-error.log
+
+[Install]
+WantedBy=multi-user.target

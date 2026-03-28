@@ -18,6 +18,7 @@ AI Stock Arena is a virtual trading benchmark for comparing how different LLMs b
 - [Local and GitHub workflow](D:/Codex/docs/step-02-local-github-flow.md)
 - [Default runtime config](D:/Codex/config/defaults.toml)
 - [Environment example](D:/Codex/.env.example)
+- [Oracle deployment](D:/Codex/docs/step-03-oracle-deployment.md)
 
 ## Local Setup
 
@@ -51,3 +52,4 @@ copy .env.example .env
 - The current universe is a curated starter set, not the full exchange universe yet.
 - Streamlit can read data directly from the database or from `API_BASE_URL` if set.
 - Oracle deployment is still pending.
+
