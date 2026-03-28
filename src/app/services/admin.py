@@ -311,6 +311,15 @@ def create_or_update_model_profile(
     return model
 
 
+def set_model_selection(session: Session, profile_id: str, is_selected: bool) -> LLMModel:
+    model = session.scalar(select(LLMModel).where(LLMModel.model_id == profile_id))
+    if model is None:
+        raise ValueError(f"Model not found: {profile_id}")
+    model.is_selected = is_selected
+    session.flush()
+    return model
+
+
 def delete_model_profile(session: Session, profile_id: str) -> dict[str, int]:
     session.execute(delete(LLMDecisionLog).where(LLMDecisionLog.model_id == profile_id))
     session.execute(delete(Position).where(Position.model_id == profile_id))

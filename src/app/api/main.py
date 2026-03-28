@@ -23,6 +23,7 @@ from app.api.schemas import (
     HealthResponse,
     LLMDecisionLogSummary,
     ModelProfileUpsertRequest,
+    ModelSelectionUpdate,
     ModelRanking,
     ModelSummary,
     NewsBatchSummary,
@@ -42,6 +43,7 @@ from app.services.admin import (
     create_or_update_model_profile,
     delete_model_profile,
     reset_simulation,
+    set_model_selection,
     update_runtime_settings,
 )
 
@@ -247,6 +249,21 @@ def upsert_model_profile(
         completion_price_per_million=payload.completion_price_per_million,
         context_length=payload.context_length,
     )
+    session.commit()
+    return next(item for item in list_models(session=session, selected_only=False) if item.model_id == model.model_id)
+
+
+@app.patch("/admin/models/{model_id:path}/selection", response_model=ModelSummary)
+def update_model_selection(
+    model_id: str,
+    payload: ModelSelectionUpdate,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ModelSummary:
+    try:
+        model = set_model_selection(session=session, profile_id=model_id, is_selected=payload.is_selected)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     session.commit()
     return next(item for item in list_models(session=session, selected_only=False) if item.model_id == model.model_id)
 

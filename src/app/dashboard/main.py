@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import sys
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from app.services.admin import (
     create_or_update_model_profile,
     delete_model_profile,
     reset_simulation,
+    set_model_selection,
     update_runtime_settings,
 )
 
@@ -44,10 +46,15 @@ WEEKDAY_OPTIONS = [
     (5, "Sat"),
     (6, "Sun"),
 ]
+PERIOD_OPTIONS = ["Since inception", "1 month", "1 week", "1 day"]
+PERIOD_MAP = {
+    "Since inception": "current_return_pct",
+    "1 month": "return_1m_pct",
+    "1 week": "return_1w_pct",
+    "1 day": "return_1d_pct",
+}
 
 st.set_page_config(page_title="AI Stock Arena", layout="wide")
-st.title("AI Stock Arena")
-st.caption("Pure model benchmark dashboard for shared-data virtual trading.")
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -125,6 +132,187 @@ def _is_admin(token: str) -> bool:
     return bool(settings.admin_token and token and token == settings.admin_token)
 
 
+def inject_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+        .stApp {
+            background: radial-gradient(circle at top right, rgba(207,79,47,0.16), transparent 28%), radial-gradient(circle at bottom left, rgba(13,92,99,0.14), transparent 26%), linear-gradient(180deg, #f7f1e8 0%, #efe3d1 100%);
+            color: #161210;
+            font-family: 'IBM Plex Sans', sans-serif;
+        }
+        h1, h2, h3, [data-testid="stMarkdownContainer"] h1, [data-testid="stMarkdownContainer"] h2 {
+            font-family: 'Space Grotesk', sans-serif;
+            letter-spacing: -0.03em;
+            color: #161210;
+        }
+        [data-testid="stSidebar"] {
+            background: rgba(255, 249, 240, 0.92);
+            border-right: 1px solid rgba(22,18,16,0.08);
+        }
+        [data-testid="stTabs"] button {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+        }
+        .asa-hero {
+            padding: 28px 30px;
+            border-radius: 28px;
+            border: 1px solid rgba(22,18,16,0.1);
+            background: linear-gradient(135deg, rgba(255,250,242,0.96), rgba(247,233,214,0.9));
+            box-shadow: 0 18px 50px rgba(22,18,16,0.08);
+            margin: 6px 0 18px 0;
+        }
+        .asa-eyebrow {
+            font: 700 0.78rem 'Space Grotesk', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.18em;
+            color: #0d5c63;
+            margin-bottom: 10px;
+        }
+        .asa-headline {
+            font: 700 clamp(2rem, 4vw, 3.8rem) 'Space Grotesk', sans-serif;
+            line-height: 0.95;
+            margin: 0;
+        }
+        .asa-subhead {
+            color: #6c625a;
+            max-width: 52rem;
+            margin-top: 14px;
+            font-size: 1rem;
+            line-height: 1.5;
+        }
+        .asa-strip {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin-top: 20px;
+        }
+        .asa-stat {
+            padding: 14px 16px;
+            background: rgba(255,255,255,0.52);
+            border: 1px solid rgba(22,18,16,0.08);
+            border-radius: 18px;
+        }
+        .asa-stat-label {
+            font: 600 0.76rem 'Space Grotesk', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: #6c625a;
+        }
+        .asa-stat-value {
+            font: 700 1.25rem 'Space Grotesk', sans-serif;
+            margin-top: 6px;
+            color: #161210;
+        }
+        .asa-podium {
+            padding: 18px;
+            border-radius: 22px;
+            background: rgba(255,249,240,0.88);
+            border: 1px solid rgba(22,18,16,0.1);
+            min-height: 196px;
+        }
+        .asa-podium-rank {
+            font: 700 0.74rem 'Space Grotesk', sans-serif;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: #cf4f2f;
+        }
+        .asa-podium-title {
+            font: 700 1.12rem 'Space Grotesk', sans-serif;
+            margin-top: 8px;
+        }
+        .asa-podium-id {
+            color: #6c625a;
+            font-size: 0.82rem;
+            margin-top: 4px;
+            word-break: break-word;
+        }
+        .asa-podium-metric {
+            font: 700 2rem 'Space Grotesk', sans-serif;
+            margin-top: 18px;
+        }
+        .asa-podium-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 16px;
+            color: #6c625a;
+            font-size: 0.84rem;
+        }
+        .asa-section-label {
+            font: 700 0.84rem 'Space Grotesk', sans-serif;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            color: #0d5c63;
+            margin-bottom: 8px;
+        }
+        .asa-warning {
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: rgba(207,79,47,0.08);
+            border: 1px solid rgba(207,79,47,0.16);
+            color: #161210;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd.DataFrame) -> None:
+    market_windows = settings_payload.get("markets", {})
+    utc_windows = {
+        item.get("market_code"): item.get("window_label_utc", "n/a")
+        for item in scheduler_payload.get("markets", [])
+    }
+    windows_line = " | ".join(f"{code}: {utc_windows.get(code, 'n/a')}" for code in market_windows)
+    leader_name = "No active model"
+    leader_return = "n/a"
+    if not rankings_df.empty:
+        leader = rankings_df.sort_values(by=["current_return_pct"], ascending=False, na_position="last").iloc[0]
+        leader_name = html.escape(str(leader.get("display_name") or leader.get("model_id")))
+        leader_return = _pct(leader.get("current_return_pct"))
+    news_mode = "OFF" if not settings_payload.get("news_enabled", False) else str(settings_payload.get("news_mode", "shared_on")).upper()
+    st.markdown(
+        f"""
+        <section class="asa-hero">
+            <div class="asa-eyebrow">Pure Model Benchmark</div>
+            <h1 class="asa-headline">AI Stock Arena</h1>
+            <div class="asa-subhead">Rank LLMs by fee-adjusted return, drawdown, and execution cost. Same markets, same cadence, same rules.</div>
+            <div class="asa-strip">
+                <div class="asa-stat"><div class="asa-stat-label">Cadence</div><div class="asa-stat-value">Every {settings_payload.get('decision_interval_minutes', 60)} min</div></div>
+                <div class="asa-stat"><div class="asa-stat-label">Windows (UTC)</div><div class="asa-stat-value">{html.escape(windows_line)}</div></div>
+                <div class="asa-stat"><div class="asa-stat-label">Current Leader</div><div class="asa-stat-value">{leader_name} | {leader_return}</div></div>
+                <div class="asa-stat"><div class="asa-stat-label">Shared News</div><div class="asa-stat-value">{html.escape(news_mode)}</div></div>
+            </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.caption(f"Active weekdays: {_weekday_labels(settings_payload.get('active_weekdays', [0, 1, 2, 3, 4]))}")
+
+
+def render_podium_card(row: pd.Series, label: str, period_label: str, period_column: str) -> str:
+    return f"""
+    <div class=\"asa-podium\">
+        <div class=\"asa-podium-rank\">{html.escape(label)}</div>
+        <div class=\"asa-podium-title\">{html.escape(str(row.get('display_name') or row.get('model_id')))}</div>
+        <div class=\"asa-podium-id\">{html.escape(str(row.get('model_id')))}</div>
+        <div class=\"asa-podium-metric\">{html.escape(_pct(row.get(period_column)))}</div>
+        <div>{html.escape(period_label)}</div>
+        <div class=\"asa-podium-grid\">
+            <div>KR: {html.escape(_pct(row.get('kr_return_pct')))}</div>
+            <div>US: {html.escape(_pct(row.get('us_return_pct')))}</div>
+            <div>MDD: {html.escape(_pct(row.get('max_drawdown')))}</div>
+            <div>LLM: ${(row.get('llm_cost_usd') or 0):.4f}</div>
+        </div>
+    </div>
+    """
+
+
+inject_styles()
+
 api_base_url = st.sidebar.text_input(
     "FastAPI base URL",
     value=settings.api_base_url or "",
@@ -149,6 +337,7 @@ settings_payload = payload["settings"] or {
     "news_mode": "shared_off",
 }
 scheduler_payload = payload.get("scheduler") or {"markets": []}
+market_windows = settings_payload.get("markets", {})
 
 models_df = pd.DataFrame(payload["models"])
 rankings_df = pd.DataFrame(payload["rankings"])
@@ -169,23 +358,7 @@ if chosen_models:
     snapshots_df = snapshots_df[snapshots_df["model_id"].isin(chosen_models)]
     models_df = models_df[models_df["model_id"].isin(chosen_models)]
 
-market_windows = settings_payload.get("markets", {})
-utc_windows = {
-    item.get("market_code"): item.get("window_label_utc", "n/a")
-    for item in scheduler_payload.get("markets", [])
-}
-window_caption = " | ".join(f"{code}: {utc_windows.get(code, 'n/a')}" for code in market_windows)
-st.caption(
-    f"Cadence: every {settings_payload.get('decision_interval_minutes', 60)} minutes | "
-    f"Weekdays: {_weekday_labels(settings_payload.get('active_weekdays', [0, 1, 2, 3, 4]))} | "
-    f"Execution window (UTC): {window_caption}"
-)
-
-metric_cols = st.columns(4)
-metric_cols[0].metric("Selected models", overview["selected_model_count"])
-metric_cols[1].metric("Visible portfolios", overview["portfolio_count"])
-metric_cols[2].metric("Combined equity", _money(overview["combined_total_equity"]))
-metric_cols[3].metric("Combined return", _pct(overview["combined_return_pct"]))
+render_hero(settings_payload, scheduler_payload, rankings_df)
 
 scheduler_df = pd.DataFrame(scheduler_payload.get("markets", []))
 if not scheduler_df.empty:
@@ -229,15 +402,9 @@ ranking_tab, performance_tab, news_tab, detail_tab, admin_tab = st.tabs(
 )
 
 with ranking_tab:
-    st.subheader("Model ranking")
-    period_map = {
-        "Since inception": "current_return_pct",
-        "1 day": "return_1d_pct",
-        "1 week": "return_1w_pct",
-        "1 month": "return_1m_pct",
-    }
-    period_label = st.selectbox("Ranking period", list(period_map.keys()), index=0)
-    sort_column = period_map[period_label]
+    st.markdown('<div class="asa-section-label">League Table</div>', unsafe_allow_html=True)
+    period_label = st.selectbox("Ranking period", PERIOD_OPTIONS, index=0)
+    sort_column = PERIOD_MAP[period_label]
     if rankings_df.empty:
         st.info("No ranking data available.")
     else:
@@ -278,13 +445,23 @@ with ranking_tab:
         if sort_column != "current_return_pct":
             ranking_columns.insert(5, "current_return_pct")
             rename_map["current_return_pct"] = "Since inception"
+        top_rows = [row for _, row in ranked.head(3).iterrows()]
+        podium_labels = ["Champion", "Pressure", "Pursuer"]
+        podium_cols = st.columns(3)
+        for idx, column in enumerate(podium_cols):
+            if idx < len(top_rows):
+                column.markdown(render_podium_card(top_rows[idx], podium_labels[idx], period_label, sort_column), unsafe_allow_html=True)
+            else:
+                column.empty()
+        st.markdown(' <div class="asa-section-label">Full Ranking</div> ' , unsafe_allow_html=True)
         st.dataframe(
             ranked[ranking_columns].rename(columns=rename_map),
             use_container_width=True,
+            hide_index=True,
         )
 
 with performance_tab:
-    st.subheader("Performance history")
+    st.markdown('<div class="asa-section-label">Trajectory</div>', unsafe_allow_html=True)
     metric_name = st.selectbox("Chart metric", ["total_return_pct", "total_equity"], index=0)
     if snapshots_df.empty:
         st.info("No performance snapshots found.")
@@ -295,9 +472,9 @@ with performance_tab:
         st.line_chart(pivoted)
 
 with news_tab:
-    st.subheader("Shared news feed")
+    st.markdown('<div class="asa-section-label">Shared News</div>', unsafe_allow_html=True)
     if not settings_payload.get("news_enabled", False):
-        st.info("Shared news is currently disabled. All models are running without external news context.")
+        st.markdown('<div class="asa-warning">Shared news is disabled. This league is running as a pure model benchmark with no external news context.</div>', unsafe_allow_html=True)
     if not news_batches:
         st.caption("No shared news batches stored yet.")
     for batch in news_batches:
@@ -311,7 +488,7 @@ with news_tab:
                 st.dataframe(items, use_container_width=True, hide_index=True)
 
 with detail_tab:
-    st.subheader("Model detail")
+    st.markdown('<div class="asa-section-label">Model Drilldown</div>', unsafe_allow_html=True)
     if not model_options:
         st.info("No models available.")
     else:
@@ -383,7 +560,7 @@ with detail_tab:
             )
 
 with admin_tab:
-    st.subheader("Admin controls")
+    st.markdown('<div class="asa-section-label">Admin Controls</div>', unsafe_allow_html=True)
     if not settings.admin_token:
         st.warning("ADMIN_TOKEN is not configured. Admin actions are disabled.")
     elif not admin_mode:
@@ -430,6 +607,26 @@ with admin_tab:
                 refresh_all()
                 st.rerun()
 
+        st.markdown("**Visibility and participation**")
+        visibility_target = st.selectbox("Toggle model participation", models_df["model_id"].tolist(), index=0 if not models_df.empty else None)
+        visibility_default = bool(models_df.loc[models_df["model_id"] == visibility_target, "is_selected"].iloc[0]) if visibility_target else False
+        keep_selected = st.checkbox("Selected for league", value=visibility_default)
+        if st.button("Save participation state", disabled=not bool(visibility_target)):
+            if api_base_url:
+                with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+                    client.patch(
+                        f"/admin/models/{visibility_target}/selection",
+                        headers={"X-Admin-Token": admin_token},
+                        json={"is_selected": keep_selected},
+                    ).raise_for_status()
+            else:
+                with SessionLocal() as session:
+                    set_model_selection(session, visibility_target, keep_selected)
+                    session.commit()
+            refresh_all()
+            st.rerun()
+        st.caption("Use participation toggle to keep data but remove a model from the active league.")
+
         st.markdown("**Model management**")
         with st.form("model_add_form"):
             profile_id = st.text_input("Profile ID")
@@ -469,8 +666,9 @@ with admin_tab:
                 st.rerun()
 
         delete_options = models_df["model_id"].tolist() if not models_df.empty else []
-        delete_target = st.selectbox("Delete model profile", delete_options, index=0 if delete_options else None)
-        if st.button("Delete selected model profile", type="secondary", disabled=not bool(delete_target)):
+        delete_target = st.selectbox("Permanently delete model profile", delete_options, index=0 if delete_options else None)
+        st.caption("Delete removes the model row and all related portfolio, trade, snapshot, prompt, and LLM log history.")
+        if st.button("Delete model and history", type="secondary", disabled=not bool(delete_target)):
             if api_base_url:
                 with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
                     client.delete(f"/admin/models/{delete_target}", headers={"X-Admin-Token": admin_token}).raise_for_status()

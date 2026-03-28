@@ -100,7 +100,7 @@ class OpenRouterClient:
         elif sort_by == "name":
             models.sort(key=lambda model: model.display_name.lower())
         elif sort_by == "popular":
-            pass
+            models.sort(key=_popularity_sort_key)
         return models
 
     def generate_meta_prompt(self, model_id: str, market_code: str) -> PromptGenerationResult:
@@ -242,6 +242,27 @@ def _price_sort_key(model: OpenRouterModel) -> tuple[float, float, str]:
     completion = model.completion_price_per_million
     combined = (prompt or 0.0) + (completion or 0.0)
     return combined, prompt or 0.0, model.display_name.lower()
+
+
+def _popularity_sort_key(model: OpenRouterModel) -> tuple[int, int, int, float, str]:
+    model_id = model.model_id.lower()
+    family_order = [
+        "gpt-oss",
+        "qwen",
+        "gemma",
+        "llama",
+        "deepseek",
+        "mistral",
+        "kimi",
+        "glm",
+        "arcee",
+        "ministral",
+    ]
+    family_rank = next((index for index, token in enumerate(family_order) if token in model_id), len(family_order))
+    preview_penalty = 1 if "preview" in model_id else 0
+    free_rank = 0 if model.is_free_like else 1
+    price_rank = (model.prompt_price_per_million or 0.0) + (model.completion_price_per_million or 0.0)
+    return family_rank, preview_penalty, free_rank, price_rank, model.display_name.lower()
 
 
 def _safe_float(value: str | float | int | None) -> float | None:

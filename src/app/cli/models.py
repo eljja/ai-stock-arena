@@ -35,9 +35,9 @@ def list_models(
 
 @cli.command()
 def probe_free_models(
-    target_count: int = 3,
-    candidate_limit: int = 12,
-    sort_by: str = "price-low",
+    target_count: int = 10,
+    candidate_limit: int = 30,
+    sort_by: str = "popular",
 ) -> None:
     create_schema()
     with SessionLocal() as session:

@@ -74,12 +74,20 @@ def sync_models_from_openrouter(session: Session, selected_model_ids: set[str]) 
 
 def probe_and_select_free_models(
     session: Session,
-    target_count: int = 3,
-    candidate_limit: int = 12,
-    sort_by: str = "price-low",
+    target_count: int = 10,
+    candidate_limit: int = 30,
+    sort_by: str = "popular",
 ) -> list[ModelProbeResult]:
     client = OpenRouterClient()
-    catalog = client.catalog(sort_by=sort_by, free_mode="only")[:candidate_limit]
+    raw_catalog = client.catalog(sort_by=sort_by, free_mode="only")
+    deduped_catalog: list[OpenRouterModel] = []
+    seen_model_ids: set[str] = set()
+    for model in raw_catalog:
+        if model.model_id in seen_model_ids:
+            continue
+        deduped_catalog.append(model)
+        seen_model_ids.add(model.model_id)
+    catalog = deduped_catalog[:candidate_limit]
 
     free_model_ids = {model.model_id for model in catalog}
     for existing in session.scalars(select(LLMModel).where(LLMModel.model_id.in_(free_model_ids))).all():

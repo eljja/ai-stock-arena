@@ -189,6 +189,10 @@ class ModelProfileUpsertRequest(BaseModel):
     context_length: int | None = None
 
 
+class ModelSelectionUpdate(BaseModel):
+    is_selected: bool
+
+
 class NewsItemSummary(BaseModel):
     title: str
     summary: str | None
