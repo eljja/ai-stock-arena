@@ -13,6 +13,8 @@ class HealthResponse(BaseModel):
 class ModelSummary(BaseModel):
     model_id: str
     display_name: str
+    request_model_id: str
+    search_mode: str
     is_selected: bool
     is_available: bool
     is_free_like: bool
@@ -108,3 +110,114 @@ class OverviewResponse(BaseModel):
     combined_return_pct: float
     latest_trade_at: datetime | None
     latest_snapshot_at: datetime | None
+
+
+class ModelRanking(BaseModel):
+    model_id: str
+    display_name: str
+    search_mode: str
+    is_free_like: bool
+    pricing_label: str
+    current_return_pct: float | None
+    return_1d_pct: float | None
+    return_1w_pct: float | None
+    return_1m_pct: float | None
+    kr_return_pct: float | None
+    us_return_pct: float | None
+    composite_score: float | None
+    max_drawdown: float | None
+    win_rate: float | None
+    trade_count: int
+    updated_at: datetime | None
+
+
+class RuntimeSettingsResponse(BaseModel):
+    decision_interval_minutes: int
+    active_weekdays: list[int]
+    markets: dict[str, dict]
+    news_enabled: bool
+    news_mode: str
+
+
+class RuntimeSettingsUpdate(BaseModel):
+    decision_interval_minutes: int | None = None
+    active_weekdays: list[int] | None = None
+    markets: dict[str, dict] | None = None
+    news_enabled: bool | None = None
+    news_mode: str | None = None
+
+
+class ResetResponse(BaseModel):
+    deleted_logs: int
+    deleted_positions: int
+    deleted_trades: int
+    deleted_snapshots: int
+    deleted_news_items: int
+    deleted_news_batches: int
+
+
+class ModelProfileUpsertRequest(BaseModel):
+    profile_id: str
+    request_model_id: str
+    display_name: str
+    provider: str = "openrouter"
+    search_mode: str = "off"
+    select_profile: bool = True
+    prompt_price_per_million: float | None = None
+    completion_price_per_million: float | None = None
+    context_length: int | None = None
+
+
+class NewsItemSummary(BaseModel):
+    title: str
+    summary: str | None
+    source: str | None
+    url: str | None
+    published_at: datetime | None
+    tickers: list[str]
+
+
+class NewsBatchSummary(BaseModel):
+    batch_key: str
+    market_code: str
+    source: str
+    summary: str | None
+    is_active: bool
+    created_at: datetime
+    items: list[NewsItemSummary]
+
+
+class LLMDecisionLogSummary(BaseModel):
+    id: int
+    model_id: str
+    request_model_id: str
+    market_code: str
+    status: str
+    prompt_text: str
+    input_payload: dict | None
+    raw_output_text: str | None
+    parsed_output: dict | None
+    error_message: str | None
+    created_at: datetime
+
+
+class CopyTradePosition(BaseModel):
+    ticker: str
+    instrument_name: str | None
+    quantity: float
+    current_price: float | None
+    market_value: float
+    target_weight_pct: float
+    avg_entry_price: float
+    last_action: str | None
+    last_action_at: datetime | None
+
+
+class CopyTradeResponse(BaseModel):
+    model_id: str
+    market_code: str
+    as_of: datetime
+    total_equity: float
+    cash_weight_pct: float
+    positions: list[CopyTradePosition]
+    recent_trades: list[TradeSummary]

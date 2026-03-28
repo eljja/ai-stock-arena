@@ -1,20 +1,39 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
+    CopyTradePosition,
+    CopyTradeResponse,
+    LLMDecisionLogSummary,
+    ModelRanking,
     ModelSummary,
+    NewsBatchSummary,
+    NewsItemSummary,
     OverviewResponse,
     PortfolioSummary,
     PositionSummary,
+    RuntimeSettingsResponse,
     SnapshotSummary,
     TradeSummary,
 )
-from app.db.models import LLMModel, MarketSetting, PerformanceSnapshot, Portfolio, Position, Trade
+from app.db.models import (
+    LLMDecisionLog,
+    LLMModel,
+    MarketSetting,
+    PerformanceSnapshot,
+    Portfolio,
+    Position,
+    SharedNewsBatch,
+    SharedNewsItem,
+    Trade,
+)
+from app.services.admin import get_runtime_settings
 
 
 def get_overview(
@@ -173,27 +192,7 @@ def list_trades(
         stmt = stmt.join(LLMModel, LLMModel.model_id == Trade.model_id).where(LLMModel.is_selected.is_(True))
 
     trades = session.scalars(stmt.limit(limit)).all()
-    return [
-        TradeSummary(
-            id=trade.id,
-            model_id=trade.model_id,
-            market_code=trade.market_code,
-            ticker=trade.ticker,
-            instrument_name=trade.instrument_name,
-            side=trade.side,
-            quantity=trade.quantity,
-            price=trade.price,
-            gross_amount=trade.gross_amount,
-            commission_amount=trade.commission_amount,
-            tax_amount=trade.tax_amount,
-            regulatory_fee_amount=trade.regulatory_fee_amount,
-            net_amount=trade.net_amount,
-            realized_pnl=trade.realized_pnl,
-            reason=trade.reason,
-            created_at=trade.created_at,
-        )
-        for trade in trades
-    ]
+    return [_serialize_trade(trade) for trade in trades]
 
 
 def list_snapshots(
@@ -213,34 +212,195 @@ def list_snapshots(
     if model_id:
         stmt = stmt.where(PerformanceSnapshot.model_id == model_id)
     if selected_only:
-        stmt = stmt.join(
-            LLMModel,
-            LLMModel.model_id == PerformanceSnapshot.model_id,
-        ).where(LLMModel.is_selected.is_(True))
+        stmt = stmt.join(LLMModel, LLMModel.model_id == PerformanceSnapshot.model_id).where(LLMModel.is_selected.is_(True))
 
     snapshots = list(reversed(session.scalars(stmt.limit(limit)).all()))
-    return [
-        SnapshotSummary(
-            model_id=snapshot.model_id,
-            market_code=snapshot.market_code,
-            available_cash=snapshot.available_cash,
-            invested_value=snapshot.invested_value,
-            total_equity=snapshot.total_equity,
-            total_return_pct=snapshot.total_return_pct,
-            realized_pnl=snapshot.realized_pnl,
-            unrealized_pnl=snapshot.unrealized_pnl,
-            volatility=snapshot.volatility,
-            sharpe_ratio=snapshot.sharpe_ratio,
-            max_drawdown=snapshot.max_drawdown,
-            win_rate=snapshot.win_rate,
-            profit_factor=snapshot.profit_factor,
-            turnover=snapshot.turnover,
-            avg_holding_hours=snapshot.avg_holding_hours,
-            composite_score=snapshot.composite_score,
-            created_at=snapshot.created_at,
+    return [_serialize_snapshot(snapshot) for snapshot in snapshots]
+
+
+def list_rankings(
+    session: Session,
+    selected_only: bool = True,
+) -> list[ModelRanking]:
+    portfolios = list_portfolios(session=session, selected_only=selected_only)
+    models_by_id = {item.model_id: item for item in list_models(session=session, selected_only=selected_only)}
+    histories = _snapshot_histories(session=session, selected_only=selected_only)
+    trade_counts = _trade_counts(session=session, selected_only=selected_only)
+
+    by_model: dict[str, list[PortfolioSummary]] = defaultdict(list)
+    for portfolio in portfolios:
+        by_model[portfolio.model_id].append(portfolio)
+
+    rankings: list[ModelRanking] = []
+    for model_id, model in models_by_id.items():
+        model_portfolios = by_model.get(model_id, [])
+        market_returns = {item.market_code: item.total_return_pct for item in model_portfolios}
+        current_return_pct = _mean(list(market_returns.values()))
+
+        period_returns = {"1d": [], "1w": [], "1m": []}
+        composite_scores: list[float] = []
+        max_drawdowns: list[float] = []
+        win_rates: list[float] = []
+        updated_at: datetime | None = None
+        for history_key, history in histories.items():
+            history_model_id, history_market_code = history_key
+            if history_model_id != model_id:
+                continue
+            latest = history[-1] if history else None
+            if latest is not None:
+                updated_at = max(updated_at, latest.created_at) if updated_at else latest.created_at
+                composite_scores.append(latest.composite_score)
+                max_drawdowns.append(latest.max_drawdown)
+                win_rates.append(latest.win_rate)
+            period_returns["1d"].append(_period_delta(history, timedelta(days=1)))
+            period_returns["1w"].append(_period_delta(history, timedelta(days=7)))
+            period_returns["1m"].append(_period_delta(history, timedelta(days=30)))
+
+        rankings.append(
+            ModelRanking(
+                model_id=model_id,
+                display_name=model.display_name,
+                search_mode=model.search_mode,
+                is_free_like=model.is_free_like,
+                pricing_label=model.pricing_label,
+                current_return_pct=current_return_pct,
+                return_1d_pct=_mean([item for item in period_returns["1d"] if item is not None]),
+                return_1w_pct=_mean([item for item in period_returns["1w"] if item is not None]),
+                return_1m_pct=_mean([item for item in period_returns["1m"] if item is not None]),
+                kr_return_pct=market_returns.get("KR"),
+                us_return_pct=market_returns.get("US"),
+                composite_score=_mean(composite_scores),
+                max_drawdown=_mean(max_drawdowns),
+                win_rate=_mean(win_rates),
+                trade_count=trade_counts.get(model_id, 0),
+                updated_at=updated_at or model.updated_at,
+            )
         )
-        for snapshot in snapshots
+
+    rankings.sort(key=lambda item: (item.current_return_pct is None, -(item.current_return_pct or -10_000)))
+    return rankings
+
+
+def list_news_batches(
+    session: Session,
+    market_code: str | None = None,
+    limit: int = 5,
+) -> list[NewsBatchSummary]:
+    stmt = select(SharedNewsBatch).order_by(SharedNewsBatch.created_at.desc())
+    if market_code:
+        stmt = stmt.where(SharedNewsBatch.market_code == market_code)
+    batches = session.scalars(stmt.limit(limit)).all()
+    batch_keys = [batch.batch_key for batch in batches]
+    items_by_batch: dict[str, list[NewsItemSummary]] = defaultdict(list)
+    if batch_keys:
+        items = session.scalars(
+            select(SharedNewsItem).where(SharedNewsItem.batch_key.in_(batch_keys)).order_by(SharedNewsItem.published_at.desc())
+        ).all()
+        for item in items:
+            items_by_batch[item.batch_key].append(
+                NewsItemSummary(
+                    title=item.title,
+                    summary=item.summary,
+                    source=item.source,
+                    url=item.url,
+                    published_at=item.published_at,
+                    tickers=list(item.tickers_json or []),
+                )
+            )
+    return [
+        NewsBatchSummary(
+            batch_key=batch.batch_key,
+            market_code=batch.market_code,
+            source=batch.source,
+            summary=batch.summary,
+            is_active=batch.is_active,
+            created_at=batch.created_at,
+            items=items_by_batch.get(batch.batch_key, []),
+        )
+        for batch in batches
     ]
+
+
+def list_llm_logs(
+    session: Session,
+    model_id: str | None = None,
+    market_code: str | None = None,
+    limit: int = 20,
+) -> list[LLMDecisionLogSummary]:
+    stmt = select(LLMDecisionLog).order_by(LLMDecisionLog.created_at.desc(), LLMDecisionLog.id.desc())
+    if model_id:
+        stmt = stmt.where(LLMDecisionLog.model_id == model_id)
+    if market_code:
+        stmt = stmt.where(LLMDecisionLog.market_code == market_code)
+    logs = session.scalars(stmt.limit(limit)).all()
+    return [
+        LLMDecisionLogSummary(
+            id=log.id,
+            model_id=log.model_id,
+            request_model_id=log.request_model_id,
+            market_code=log.market_code,
+            status=log.status,
+            prompt_text=log.prompt_text,
+            input_payload=log.input_payload,
+            raw_output_text=log.raw_output_text,
+            parsed_output=log.parsed_output,
+            error_message=log.error_message,
+            created_at=log.created_at,
+        )
+        for log in logs
+    ]
+
+
+def get_copy_trade(session: Session, model_id: str, market_code: str) -> CopyTradeResponse:
+    portfolio = session.scalar(
+        select(Portfolio).where(Portfolio.model_id == model_id, Portfolio.market_code == market_code)
+    )
+    if portfolio is None:
+        raise ValueError(f"Portfolio not found for model={model_id} market={market_code}")
+
+    positions = session.scalars(
+        select(Position).where(Position.model_id == model_id, Position.market_code == market_code).order_by(Position.market_value.desc())
+    ).all()
+    trades = session.scalars(
+        select(Trade).where(Trade.model_id == model_id, Trade.market_code == market_code).order_by(Trade.created_at.desc())
+    ).all()
+    latest_trade_by_ticker: dict[str, Trade] = {}
+    for trade in trades:
+        latest_trade_by_ticker.setdefault(trade.ticker, trade)
+
+    total_equity = portfolio.total_equity or 0.0
+    position_payload = []
+    for position in positions:
+        latest_trade = latest_trade_by_ticker.get(position.ticker)
+        position_payload.append(
+            CopyTradePosition(
+                ticker=position.ticker,
+                instrument_name=position.instrument_name,
+                quantity=position.quantity,
+                current_price=position.current_price,
+                market_value=position.market_value,
+                target_weight_pct=((position.market_value / total_equity) * 100) if total_equity else 0.0,
+                avg_entry_price=position.avg_entry_price,
+                last_action=latest_trade.side if latest_trade else None,
+                last_action_at=latest_trade.created_at if latest_trade else None,
+            )
+        )
+
+    recent_trades = [_serialize_trade(trade) for trade in trades[:10]]
+    return CopyTradeResponse(
+        model_id=model_id,
+        market_code=market_code,
+        as_of=portfolio.updated_at,
+        total_equity=portfolio.total_equity,
+        cash_weight_pct=((portfolio.available_cash / total_equity) * 100) if total_equity else 0.0,
+        positions=position_payload,
+        recent_trades=recent_trades,
+    )
+
+
+def get_runtime_settings_response(session: Session) -> RuntimeSettingsResponse:
+    settings = get_runtime_settings(session)
+    return RuntimeSettingsResponse(**settings)
 
 
 def _serialize_model(model: LLMModel) -> ModelSummary:
@@ -248,6 +408,8 @@ def _serialize_model(model: LLMModel) -> ModelSummary:
     return ModelSummary(
         model_id=model.model_id,
         display_name=model.display_name,
+        request_model_id=metadata.get("request_model_id") or model.model_id,
+        search_mode=metadata.get("search_mode", "off"),
         is_selected=model.is_selected,
         is_available=model.is_available,
         is_free_like=bool(metadata.get("is_free_like", _infer_is_free_like(model))),
@@ -257,6 +419,49 @@ def _serialize_model(model: LLMModel) -> ModelSummary:
         context_length=model.context_length,
         probe_detail=metadata.get("probe_detail"),
         updated_at=model.updated_at,
+    )
+
+
+def _serialize_trade(trade: Trade) -> TradeSummary:
+    return TradeSummary(
+        id=trade.id,
+        model_id=trade.model_id,
+        market_code=trade.market_code,
+        ticker=trade.ticker,
+        instrument_name=trade.instrument_name,
+        side=trade.side,
+        quantity=trade.quantity,
+        price=trade.price,
+        gross_amount=trade.gross_amount,
+        commission_amount=trade.commission_amount,
+        tax_amount=trade.tax_amount,
+        regulatory_fee_amount=trade.regulatory_fee_amount,
+        net_amount=trade.net_amount,
+        realized_pnl=trade.realized_pnl,
+        reason=trade.reason,
+        created_at=trade.created_at,
+    )
+
+
+def _serialize_snapshot(snapshot: PerformanceSnapshot) -> SnapshotSummary:
+    return SnapshotSummary(
+        model_id=snapshot.model_id,
+        market_code=snapshot.market_code,
+        available_cash=snapshot.available_cash,
+        invested_value=snapshot.invested_value,
+        total_equity=snapshot.total_equity,
+        total_return_pct=snapshot.total_return_pct,
+        realized_pnl=snapshot.realized_pnl,
+        unrealized_pnl=snapshot.unrealized_pnl,
+        volatility=snapshot.volatility,
+        sharpe_ratio=snapshot.sharpe_ratio,
+        max_drawdown=snapshot.max_drawdown,
+        win_rate=snapshot.win_rate,
+        profit_factor=snapshot.profit_factor,
+        turnover=snapshot.turnover,
+        avg_holding_hours=snapshot.avg_holding_hours,
+        composite_score=snapshot.composite_score,
+        created_at=snapshot.created_at,
     )
 
 
@@ -309,6 +514,52 @@ def _latest_snapshot_times(session: Session, enabled_market_codes: list[str]) ->
         stmt.group_by(PerformanceSnapshot.model_id, PerformanceSnapshot.market_code)
     ).all()
     return {(model_id, market_code): created_at for model_id, market_code, created_at in rows}
+
+
+def _snapshot_histories(session: Session, selected_only: bool) -> dict[tuple[str, str], list[PerformanceSnapshot]]:
+    stmt = select(PerformanceSnapshot).order_by(PerformanceSnapshot.created_at.asc(), PerformanceSnapshot.id.asc())
+    if selected_only:
+        stmt = stmt.join(LLMModel, LLMModel.model_id == PerformanceSnapshot.model_id).where(LLMModel.is_selected.is_(True))
+    rows = session.scalars(stmt).all()
+    grouped: dict[tuple[str, str], list[PerformanceSnapshot]] = defaultdict(list)
+    enabled = set(_enabled_market_codes(session))
+    for row in rows:
+        if row.market_code not in enabled:
+            continue
+        grouped[(row.model_id, row.market_code)].append(row)
+    return grouped
+
+
+def _trade_counts(session: Session, selected_only: bool) -> dict[str, int]:
+    stmt = select(Trade.model_id, func.count(Trade.id)).group_by(Trade.model_id)
+    if selected_only:
+        stmt = stmt.join(LLMModel, LLMModel.model_id == Trade.model_id).where(LLMModel.is_selected.is_(True))
+    enabled = set(_enabled_market_codes(session))
+    stmt = stmt.where(Trade.market_code.in_(enabled))
+    rows = session.execute(stmt).all()
+    return {model_id: count for model_id, count in rows}
+
+
+def _period_delta(history: list[PerformanceSnapshot], delta: timedelta) -> float | None:
+    if len(history) < 2:
+        return None
+    latest = history[-1]
+    cutoff = latest.created_at - delta
+    baseline = None
+    for item in history:
+        if item.created_at <= cutoff:
+            baseline = item
+        else:
+            break
+    if baseline is None:
+        return None
+    return latest.total_return_pct - baseline.total_return_pct
+
+
+def _mean(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / len(values)
 
 
 def _pct(current_value: float, basis_value: float) -> float:

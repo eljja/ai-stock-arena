@@ -1,9 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import ModelMarketPrompt, Portfolio, Position
+from app.db.models import LLMDecisionLog, LLMModel, ModelMarketPrompt, Portfolio, Position
 from app.llm.openrouter import OpenRouterClient
 from app.llm.schemas import TradingDecision
 from app.market_data.models import Candidate, MarketSnapshot
@@ -36,8 +36,9 @@ class TradingCycleService:
             )
         if prompt is None:
             raise ValueError(f"Prompt row missing for model={model_id}, market={market_code}")
+        request_model_id = _resolve_request_model_id(session, model_id)
         if prompt.prompt_content == "PENDING_GENERATION":
-            generated = self.client.generate_meta_prompt(model_id=model_id, market_code=market_code)
+            generated = self.client.generate_meta_prompt(model_id=request_model_id, market_code=market_code)
             prompt.prompt_content = generated.prompt_content
             prompt.source_meta_prompt = generated.raw_response
             session.flush()
@@ -52,16 +53,58 @@ class TradingCycleService:
         candidates: list[Candidate],
     ) -> tuple[TradingDecision, str]:
         prompt = self.ensure_active_prompt(session, model_id, market_code)
+        portfolio_payload = _portfolio_payload(session, model_id, market_code)
+        position_payload = _position_payload(session, model_id, market_code)
+        candidate_payload = _candidate_payload(candidates)
         prompt_text = build_decision_prompt(
             market_code=market_code,
             custom_prompt=prompt.prompt_content,
-            portfolio=_portfolio_payload(session, model_id, market_code),
-            positions=_position_payload(session, model_id, market_code),
+            portfolio=portfolio_payload,
+            positions=position_payload,
             candidates=candidates,
             snapshot=snapshot,
         )
-        decision = self.client.request_trading_decision(model_id=model_id, decision_prompt=prompt_text)
-        return decision, prompt.prompt_content
+        request_model_id = _resolve_request_model_id(session, model_id)
+        input_payload = {
+            "market_code": market_code,
+            "snapshot_as_of": snapshot.as_of.isoformat(),
+            "portfolio": portfolio_payload,
+            "positions": position_payload,
+            "candidates": candidate_payload,
+        }
+        try:
+            decision = self.client.request_trading_decision(model_id=request_model_id, decision_prompt=prompt_text)
+            session.add(
+                LLMDecisionLog(
+                    model_id=model_id,
+                    request_model_id=request_model_id,
+                    market_code=market_code,
+                    status="success",
+                    prompt_text=prompt_text,
+                    input_payload=input_payload,
+                    raw_output_text=decision.raw_response,
+                    parsed_output=decision.model_dump(exclude={"raw_response"}),
+                    error_message=None,
+                )
+            )
+            session.flush()
+            return decision, prompt.prompt_content
+        except Exception as exc:
+            session.add(
+                LLMDecisionLog(
+                    model_id=model_id,
+                    request_model_id=request_model_id,
+                    market_code=market_code,
+                    status="error",
+                    prompt_text=prompt_text,
+                    input_payload=input_payload,
+                    raw_output_text=None,
+                    parsed_output=None,
+                    error_message=str(exc),
+                )
+            )
+            session.flush()
+            raise
 
     def execute_decision(
         self,
@@ -152,19 +195,7 @@ def build_decision_prompt(
     candidates: list[Candidate],
     snapshot: MarketSnapshot,
 ) -> str:
-    candidate_payload = [
-        {
-            "ticker": candidate.ticker,
-            "instrument_name": candidate.instrument_name,
-            "screen_score": candidate.score,
-            "reasons": candidate.reasons,
-            "price": candidate.snapshot.current_price if candidate.snapshot else None,
-            "return_1h_pct": candidate.snapshot.return_1h_pct if candidate.snapshot else None,
-            "return_1d_pct": candidate.snapshot.return_1d_pct if candidate.snapshot else None,
-            "intraday_volatility_pct": candidate.snapshot.intraday_volatility_pct if candidate.snapshot else None,
-        }
-        for candidate in candidates
-    ]
+    candidate_payload = _candidate_payload(candidates)
     return f"""
 {custom_prompt}
 
@@ -262,6 +293,30 @@ def _position_payload(session: Session, model_id: str, market_code: str) -> list
         }
         for position in positions
     ]
+
+
+def _candidate_payload(candidates: list[Candidate]) -> list[dict]:
+    return [
+        {
+            "ticker": candidate.ticker,
+            "instrument_name": candidate.instrument_name,
+            "screen_score": candidate.score,
+            "reasons": candidate.reasons,
+            "price": candidate.snapshot.current_price if candidate.snapshot else None,
+            "return_1h_pct": candidate.snapshot.return_1h_pct if candidate.snapshot else None,
+            "return_1d_pct": candidate.snapshot.return_1d_pct if candidate.snapshot else None,
+            "intraday_volatility_pct": candidate.snapshot.intraday_volatility_pct if candidate.snapshot else None,
+        }
+        for candidate in candidates
+    ]
+
+
+def _resolve_request_model_id(session: Session, model_id: str) -> str:
+    model = session.scalar(select(LLMModel).where(LLMModel.model_id == model_id))
+    if model is None:
+        return model_id
+    metadata = model.metadata_json or {}
+    return metadata.get("request_model_id") or model.model_id
 
 
 def _quantity_from_cash_amount(cash_amount: float | None, current_price: float) -> int:

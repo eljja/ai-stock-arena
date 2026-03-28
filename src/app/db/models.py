@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import UTC, datetime
 
@@ -146,4 +146,57 @@ class PerformanceSnapshot(Base):
     turnover: Mapped[float] = mapped_column(Float, default=0.0)
     avg_holding_hours: Mapped[float] = mapped_column(Float, default=0.0)
     composite_score: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class AdminSetting(Base):
+    __tablename__ = "admin_settings"
+    __table_args__ = (UniqueConstraint("key", name="uq_admin_settings_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(100), index=True)
+    value_json: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class SharedNewsBatch(Base):
+    __tablename__ = "shared_news_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_key: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    market_code: Mapped[str] = mapped_column(String(30), index=True)
+    source: Mapped[str] = mapped_column(String(100), default="manual")
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class SharedNewsItem(Base):
+    __tablename__ = "shared_news_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_key: Mapped[str] = mapped_column(String(120), index=True)
+    market_code: Mapped[str] = mapped_column(String(30), index=True)
+    title: Mapped[str] = mapped_column(Text)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    tickers_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class LLMDecisionLog(Base):
+    __tablename__ = "llm_decision_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    model_id: Mapped[str] = mapped_column(String(255), index=True)
+    request_model_id: Mapped[str] = mapped_column(String(255), index=True)
+    market_code: Mapped[str] = mapped_column(String(30), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="success")
+    prompt_text: Mapped[str] = mapped_column(Text)
+    input_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    raw_output_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parsed_output: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)

@@ -75,4 +75,4 @@ class Settings(BaseSettings):
     default_model_ids: str = Field(default="", alias="DEFAULT_MODEL_IDS")
     config_file: Path = Field(default=Path("config/defaults.toml"), alias="CONFIG_FILE")
     api_base_url: str | None = Field(default=None, alias="API_BASE_URL")
-
+    admin_token: str | None = Field(default=None, alias="ADMIN_TOKEN")

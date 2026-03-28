@@ -10,6 +10,7 @@ from app.db.base import Base
 from app.db.models import LLMModel, MarketSetting, ModelMarketPrompt, Portfolio
 from app.db.session import engine
 from app.llm.openrouter import OpenRouterClient, OpenRouterModel
+from app.services.admin import get_runtime_settings
 
 MARKET_LABELS = {
     "KR": "Korea Equity Market",
@@ -41,6 +42,7 @@ def bootstrap_database(session: Session, sync_openrouter_models: bool = True) ->
     runtime_config = load_runtime_config()
     settings = load_settings()
     selected_model_ids = set(parse_default_model_ids(settings))
+    get_runtime_settings(session)
 
     synced_models = 0
     if sync_openrouter_models:
@@ -125,11 +127,16 @@ def upsert_openrouter_model(
     existing.context_length = external_model.context_length
     existing.prompt_price_per_million = external_model.prompt_price_per_million
     existing.completion_price_per_million = external_model.completion_price_per_million
+    previous_metadata = existing.metadata_json or {}
     existing.metadata_json = {
-        **(existing.metadata_json or {}),
+        **previous_metadata,
         **external_model.metadata_json,
+        "request_model_id": external_model.model_id,
+        "base_model_id": external_model.model_id.replace(":online", ""),
+        "search_mode": previous_metadata.get("search_mode", "off"),
         "is_free_like": external_model.is_free_like,
         "pricing_label": external_model.pricing_label,
+        "probe_detail": previous_metadata.get("probe_detail"),
     }
     existing.is_available = True
     existing.is_selected = (
@@ -234,4 +241,3 @@ def _default_meta_prompt(market_code: str) -> str:
         "context, keep the portfolio under 10 positions, and account for market-specific fees and taxes. "
         "Return a production-ready prompt that will later be used for hourly virtual trading decisions."
     )
-
