@@ -1,4 +1,4 @@
-﻿# AI Stock Arena
+# AI Stock Arena
 
 AI Stock Arena is a virtual trading benchmark for comparing how different LLMs behave under the same market constraints.
 
@@ -35,6 +35,8 @@ copy .env.example .env
 .\.venv\Scripts\python.exe -m app.cli.market demo-cycle US --model-id demo/manual-strategy --picks 2
 .\.venv\Scripts\python.exe -m app.cli.llm generate-prompt US openai/gpt-4o-mini
 .\.venv\Scripts\python.exe -m app.cli.llm run-cycle US openai/gpt-4o-mini --candidate-limit 12
+.\.venv\Scripts\python.exe -m uvicorn app.api.main:app --reload
+.\.venv\Scripts\python.exe -m streamlit run src\app\dashboard\app.py
 ```
 
 ## Notes
@@ -43,4 +45,7 @@ copy .env.example .env
 - OpenRouter free variants and zero-token-cost models can be listed through the model catalog CLI.
 - `yfinance` is currently used for prototype market data collection.
 - The current universe is a curated starter set, not the full exchange universe yet.
-- Oracle deployment, API, dashboard, and automated scheduler are still pending.
+- The FastAPI layer is read-only for dashboard and debugging use.
+- Streamlit can read data directly from the database or from `API_BASE_URL` if set.
+- Oracle deployment and automated scheduler are still pending.
+

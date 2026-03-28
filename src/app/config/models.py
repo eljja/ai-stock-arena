@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -74,3 +74,5 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
     default_model_ids: str = Field(default="", alias="DEFAULT_MODEL_IDS")
     config_file: Path = Field(default=Path("config/defaults.toml"), alias="CONFIG_FILE")
+    api_base_url: str | None = Field(default=None, alias="API_BASE_URL")
+
