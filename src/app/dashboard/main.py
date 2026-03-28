@@ -138,18 +138,24 @@ def inject_styles() -> None:
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
         .stApp {
-            background: radial-gradient(circle at top right, rgba(207,79,47,0.16), transparent 28%), radial-gradient(circle at bottom left, rgba(13,92,99,0.14), transparent 26%), linear-gradient(180deg, #f7f1e8 0%, #efe3d1 100%);
-            color: #161210;
+            background: radial-gradient(circle at top right, rgba(255,102,102,0.16), transparent 28%), radial-gradient(circle at bottom left, rgba(59,130,246,0.16), transparent 28%), linear-gradient(180deg, #07111f 0%, #0d1526 48%, #111827 100%);
+            color: #eef2ff;
             font-family: 'IBM Plex Sans', sans-serif;
         }
         h1, h2, h3, [data-testid="stMarkdownContainer"] h1, [data-testid="stMarkdownContainer"] h2 {
             font-family: 'Space Grotesk', sans-serif;
             letter-spacing: -0.03em;
-            color: #161210;
+            color: #f8fafc;
         }
+        .stApp a { color: #93c5fd; }
         [data-testid="stSidebar"] {
-            background: rgba(255, 249, 240, 0.92);
-            border-right: 1px solid rgba(22,18,16,0.08);
+            background: rgba(10, 15, 28, 0.96);
+            border-right: 1px solid rgba(148, 163, 184, 0.18);
+            min-width: 26rem !important;
+            max-width: 26rem !important;
+        }
+        [data-testid="stSidebar"] > div:first-child {
+            width: 26rem !important;
         }
         [data-testid="stTabs"] button {
             font-family: 'Space Grotesk', sans-serif;
@@ -159,15 +165,15 @@ def inject_styles() -> None:
             padding: 28px 30px;
             border-radius: 28px;
             border: 1px solid rgba(22,18,16,0.1);
-            background: linear-gradient(135deg, rgba(255,250,242,0.96), rgba(247,233,214,0.9));
-            box-shadow: 0 18px 50px rgba(22,18,16,0.08);
+            background: linear-gradient(135deg, rgba(12, 23, 40, 0.98), rgba(19, 34, 56, 0.92));
+            box-shadow: 0 24px 60px rgba(2, 6, 23, 0.45);
             margin: 6px 0 18px 0;
         }
         .asa-eyebrow {
             font: 700 0.78rem 'Space Grotesk', sans-serif;
             text-transform: uppercase;
             letter-spacing: 0.18em;
-            color: #0d5c63;
+            color: #67e8f9;
             margin-bottom: 10px;
         }
         .asa-headline {
@@ -176,7 +182,7 @@ def inject_styles() -> None:
             margin: 0;
         }
         .asa-subhead {
-            color: #6c625a;
+            color: #94a3b8;
             max-width: 52rem;
             margin-top: 14px;
             font-size: 1rem;
@@ -190,40 +196,40 @@ def inject_styles() -> None:
         }
         .asa-stat {
             padding: 14px 16px;
-            background: rgba(255,255,255,0.52);
-            border: 1px solid rgba(22,18,16,0.08);
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid rgba(148, 163, 184, 0.16);
             border-radius: 18px;
         }
         .asa-stat-label {
             font: 600 0.76rem 'Space Grotesk', sans-serif;
             text-transform: uppercase;
             letter-spacing: 0.1em;
-            color: #6c625a;
+            color: #94a3b8;
         }
         .asa-stat-value {
             font: 700 1.25rem 'Space Grotesk', sans-serif;
             margin-top: 6px;
-            color: #161210;
+            color: #f8fafc;
         }
         .asa-podium {
             padding: 18px;
             border-radius: 22px;
-            background: rgba(255,249,240,0.88);
-            border: 1px solid rgba(22,18,16,0.1);
+            background: rgba(15, 23, 42, 0.82);
+            border: 1px solid rgba(148, 163, 184, 0.18);
             min-height: 196px;
         }
         .asa-podium-rank {
             font: 700 0.74rem 'Space Grotesk', sans-serif;
             letter-spacing: 0.18em;
             text-transform: uppercase;
-            color: #cf4f2f;
+            color: #fb7185;
         }
         .asa-podium-title {
             font: 700 1.12rem 'Space Grotesk', sans-serif;
             margin-top: 8px;
         }
         .asa-podium-id {
-            color: #6c625a;
+            color: #94a3b8;
             font-size: 0.82rem;
             margin-top: 4px;
             word-break: break-word;
@@ -237,14 +243,14 @@ def inject_styles() -> None:
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 10px;
             margin-top: 16px;
-            color: #6c625a;
+            color: #94a3b8;
             font-size: 0.84rem;
         }
         .asa-section-label {
             font: 700 0.84rem 'Space Grotesk', sans-serif;
             letter-spacing: 0.16em;
             text-transform: uppercase;
-            color: #0d5c63;
+            color: #67e8f9;
             margin-bottom: 8px;
         }
         .asa-warning {
@@ -252,8 +258,9 @@ def inject_styles() -> None:
             border-radius: 16px;
             background: rgba(207,79,47,0.08);
             border: 1px solid rgba(207,79,47,0.16);
-            color: #161210;
+            color: #f8fafc;
         }
+        .stDataFrame, [data-testid="stMetric"] { background: transparent !important; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -291,6 +298,32 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
         unsafe_allow_html=True,
     )
     st.caption(f"Active weekdays: {_weekday_labels(settings_payload.get('active_weekdays', [0, 1, 2, 3, 4]))}")
+
+
+def model_allocation_frame(model_id: str, positions_df: pd.DataFrame, portfolios_df: pd.DataFrame, top_n: int = 6) -> pd.DataFrame:
+    if positions_df.empty or portfolios_df.empty:
+        return pd.DataFrame(columns=["label", "weight_pct"])
+    model_positions = positions_df[positions_df["model_id"] == model_id].copy()
+    model_portfolios = portfolios_df[portfolios_df["model_id"] == model_id].copy()
+    rows: list[dict[str, float | str]] = []
+    for _, portfolio in model_portfolios.iterrows():
+        market_code = str(portfolio["market_code"])
+        total_equity = float(portfolio.get("total_equity") or 0.0)
+        if total_equity <= 0:
+            continue
+        cash_weight = (float(portfolio.get("available_cash") or 0.0) / total_equity) * 100
+        if cash_weight > 0:
+            rows.append({"label": f"[{market_code}] CASH", "weight_pct": cash_weight})
+        market_positions = model_positions[model_positions["market_code"] == market_code]
+        for _, position in market_positions.iterrows():
+            market_value = float(position.get("market_value") or 0.0)
+            if market_value <= 0:
+                continue
+            rows.append({"label": f"[{market_code}] {position['ticker']}", "weight_pct": (market_value / total_equity) * 100})
+    if not rows:
+        return pd.DataFrame(columns=["label", "weight_pct"])
+    allocation_df = pd.DataFrame(rows).sort_values("weight_pct", ascending=False).head(top_n)
+    return allocation_df
 
 
 def render_podium_card(row: pd.Series, label: str, period_label: str, period_column: str) -> str:
@@ -361,41 +394,6 @@ if chosen_models:
 render_hero(settings_payload, scheduler_payload, rankings_df)
 
 scheduler_df = pd.DataFrame(scheduler_payload.get("markets", []))
-if not scheduler_df.empty:
-    st.markdown("**Scheduler status**")
-    st.dataframe(
-        scheduler_df[
-            [
-                "market_code",
-                "market_timezone",
-                "window_label_utc",
-                "enabled",
-                "in_active_window",
-                "is_due",
-                "last_status",
-                "last_message",
-                "last_started_at",
-                "last_completed_at",
-                "next_run_at",
-            ]
-        ].rename(
-            columns={
-                "market_code": "Market",
-                "market_timezone": "Timezone",
-                "window_label_utc": "Window (UTC)",
-                "enabled": "Enabled",
-                "in_active_window": "In window",
-                "is_due": "Due now",
-                "last_status": "Last status",
-                "last_message": "Last message",
-                "last_started_at": "Last started",
-                "last_completed_at": "Last completed",
-                "next_run_at": "Next run",
-            }
-        ),
-        use_container_width=True,
-        hide_index=True,
-    )
 
 ranking_tab, performance_tab, news_tab, detail_tab, admin_tab = st.tabs(
     ["Ranking", "Performance", "Shared News", "Model Detail", "Admin"]
@@ -451,6 +449,12 @@ with ranking_tab:
         for idx, column in enumerate(podium_cols):
             if idx < len(top_rows):
                 column.markdown(render_podium_card(top_rows[idx], podium_labels[idx], period_label, sort_column), unsafe_allow_html=True)
+                allocation_df = model_allocation_frame(str(top_rows[idx]["model_id"]), positions_df, portfolios_df)
+                if allocation_df.empty:
+                    column.caption("No current holdings")
+                else:
+                    column.caption("Hover to inspect current allocation")
+                    column.bar_chart(allocation_df.set_index("label"), height=220)
             else:
                 column.empty()
         st.markdown(' <div class="asa-section-label">Full Ranking</div> ' , unsafe_allow_html=True)
@@ -665,19 +669,7 @@ with admin_tab:
                 refresh_all()
                 st.rerun()
 
-        delete_options = models_df["model_id"].tolist() if not models_df.empty else []
-        delete_target = st.selectbox("Permanently delete model profile", delete_options, index=0 if delete_options else None)
-        st.caption("Delete removes the model row and all related portfolio, trade, snapshot, prompt, and LLM log history.")
-        if st.button("Delete model and history", type="secondary", disabled=not bool(delete_target)):
-            if api_base_url:
-                with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-                    client.delete(f"/admin/models/{delete_target}", headers={"X-Admin-Token": admin_token}).raise_for_status()
-            else:
-                with SessionLocal() as session:
-                    delete_model_profile(session, delete_target)
-                    session.commit()
-            refresh_all()
-            st.rerun()
+        st.caption("Destructive model deletion is no longer available in the dashboard. Use the admin API only if you need a permanent purge.")
 
         st.markdown("**Reset simulation**")
         if st.button("Reset all trading data and restart", type="primary"):
@@ -690,3 +682,26 @@ with admin_tab:
                     session.commit()
             refresh_all()
             st.rerun()
+
+if not scheduler_df.empty:
+    st.markdown("---")
+    st.markdown('<div class="asa-section-label">Scheduler Status</div>', unsafe_allow_html=True)
+    st.dataframe(
+        scheduler_df[["market_code", "market_timezone", "window_label_utc", "in_active_window", "is_due", "last_status", "last_completed_at", "next_run_at"]].rename(
+            columns={
+                "market_code": "Market",
+                "market_timezone": "Timezone",
+                "window_label_utc": "Window (UTC)",
+                "in_active_window": "In window",
+                "is_due": "Due now",
+                "last_status": "Last status",
+                "last_completed_at": "Last completed",
+                "next_run_at": "Next run",
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+st.markdown("---")
+st.caption("Made by eljja1@gmail.com")
