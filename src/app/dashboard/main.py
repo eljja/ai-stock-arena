@@ -585,7 +585,8 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
         leader = rankings_df.sort_values(by=["current_return_pct"], ascending=False, na_position="last").iloc[0]
         leader_name = html.escape(str(leader.get("display_name") or leader.get("model_id")))
         leader_return = _pct(leader.get("current_return_pct"))
-    news_mode = "OFF" if not settings_payload.get("news_enabled", False) else str(settings_payload.get("news_mode", "shared_on")).upper()
+    refresh_minutes = int(settings_payload.get("news_refresh_interval_minutes", 30) or 30)
+    news_mode = "OFF" if not settings_payload.get("news_enabled", False) else f"MARKETAUX {refresh_minutes}M"
     news_policy = str(settings_payload.get("news_collection_policy", "development_fallback")).replace("_", " ").title()
     news_rows = _news_preview_rows(news_batches, limit=20)
     st.markdown(

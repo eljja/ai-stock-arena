@@ -51,6 +51,14 @@ DEFAULT_SCHEDULER_ENTRY = {
 }
 
 
+
+
+def _derive_news_mode(news_enabled: bool, refresh_minutes: int) -> str:
+    if not news_enabled:
+        return "shared_off"
+    return f"shared_marketaux_{int(refresh_minutes)}m"
+
+
 def default_news_collection_policy() -> str:
     settings = load_settings()
     return "development_fallback" if settings.database_url.startswith("sqlite") else "live_strict"
@@ -68,6 +76,7 @@ def get_runtime_settings(session: Session) -> dict:
     value = {**DEFAULT_RUNTIME_SETTINGS, **(setting.value_json or {})}
     value["news_refresh_interval_minutes"] = int(value.get("news_refresh_interval_minutes") or 30)
     value["news_collection_policy"] = value.get("news_collection_policy") or default_news_collection_policy()
+    value["news_mode"] = _derive_news_mode(bool(value.get("news_enabled", False)), int(value.get("news_refresh_interval_minutes") or 30))
     markets = {**DEFAULT_RUNTIME_SETTINGS.get("markets", {}), **(value.get("markets", {}))}
     changed = False
     us_window = markets.get("US", {})
@@ -92,6 +101,7 @@ def update_runtime_settings(session: Session, payload: dict) -> dict:
     merged = {**current, **payload}
     merged["news_refresh_interval_minutes"] = int(merged.get("news_refresh_interval_minutes") or 30)
     merged["news_collection_policy"] = merged.get("news_collection_policy") or default_news_collection_policy()
+    merged["news_mode"] = _derive_news_mode(bool(merged.get("news_enabled", False)), int(merged.get("news_refresh_interval_minutes") or 30))
     if "markets" in payload:
         merged["markets"] = {**current.get("markets", {}), **payload["markets"]}
     setting = session.scalar(select(AdminSetting).where(AdminSetting.key == RUNTIME_SETTINGS_KEY))
