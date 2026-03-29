@@ -170,6 +170,7 @@ class RuntimeSettingsUpdate(BaseModel):
 
 class ResetResponse(BaseModel):
     deleted_logs: int
+    deleted_run_requests: int
     deleted_positions: int
     deleted_trades: int
     deleted_snapshots: int
@@ -229,6 +230,20 @@ class LLMDecisionLogSummary(BaseModel):
     error_message: str | None
     created_at: datetime
 
+class RunRequestSummary(BaseModel):
+    id: int
+    model_id: str
+    market_code: str
+    trigger_source: str
+    status: str
+    candidate_count: int | None
+    snapshot_as_of: datetime | None
+    requested_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    summary_message: str | None
+    error_message: str | None
+
 
 class CopyTradePosition(BaseModel):
     ticker: str
@@ -250,3 +265,4 @@ class CopyTradeResponse(BaseModel):
     cash_weight_pct: float
     positions: list[CopyTradePosition]
     recent_trades: list[TradeSummary]
+

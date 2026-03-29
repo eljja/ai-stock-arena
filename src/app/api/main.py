@@ -14,6 +14,7 @@ from app.api.query_service import (
     list_news_batches,
     list_portfolios,
     list_positions,
+    list_run_requests,
     list_rankings,
     list_snapshots,
     list_trades,
@@ -30,6 +31,7 @@ from app.api.schemas import (
     OverviewResponse,
     PortfolioSummary,
     PositionSummary,
+    RunRequestSummary,
     ResetResponse,
     RuntimeSettingsResponse,
     RuntimeSettingsUpdate,
@@ -179,6 +181,24 @@ def news(
     return list_news_batches(session=session, market_code=market_code, limit=limit)
 
 
+@app.get("/run-requests", response_model=list[RunRequestSummary])
+def run_requests(
+    market_code: str | None = Query(default=None),
+    model_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    selected_only: bool = Query(default=False),
+    limit: int = Query(default=50, ge=1, le=500),
+    session: Session = Depends(get_session),
+) -> list[RunRequestSummary]:
+    return list_run_requests(
+        session=session,
+        model_id=model_id,
+        market_code=market_code,
+        status=status,
+        selected_only=selected_only,
+        limit=limit,
+    )
+
 @app.get("/llm-logs", response_model=list[LLMDecisionLogSummary])
 def llm_logs(
     market_code: str | None = Query(default=None),
@@ -277,3 +297,4 @@ def remove_model_profile(
     result = delete_model_profile(session=session, profile_id=model_id)
     session.commit()
     return result
+

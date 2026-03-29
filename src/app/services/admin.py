@@ -15,6 +15,7 @@ from app.db.models import (
     PerformanceSnapshot,
     Portfolio,
     Position,
+    RunRequest,
     SharedNewsBatch,
     SharedNewsItem,
     Trade,
@@ -199,6 +200,7 @@ def get_scheduler_status(session: Session, now: datetime | None = None) -> dict:
 
 def reset_simulation(session: Session, reset_prompts: bool = True) -> dict[str, int]:
     deleted_logs = session.execute(delete(LLMDecisionLog)).rowcount or 0
+    deleted_run_requests = session.execute(delete(RunRequest)).rowcount or 0
     deleted_positions = session.execute(delete(Position)).rowcount or 0
     deleted_trades = session.execute(delete(Trade)).rowcount or 0
     deleted_snapshots = session.execute(delete(PerformanceSnapshot)).rowcount or 0
@@ -253,6 +255,7 @@ def reset_simulation(session: Session, reset_prompts: bool = True) -> dict[str, 
     session.flush()
     return {
         "deleted_logs": deleted_logs,
+        "deleted_run_requests": deleted_run_requests,
         "deleted_positions": deleted_positions,
         "deleted_trades": deleted_trades,
         "deleted_snapshots": deleted_snapshots,
@@ -322,6 +325,7 @@ def set_model_selection(session: Session, profile_id: str, is_selected: bool) ->
 
 def delete_model_profile(session: Session, profile_id: str) -> dict[str, int]:
     session.execute(delete(LLMDecisionLog).where(LLMDecisionLog.model_id == profile_id))
+    session.execute(delete(RunRequest).where(RunRequest.model_id == profile_id))
     session.execute(delete(Position).where(Position.model_id == profile_id))
     session.execute(delete(Trade).where(Trade.model_id == profile_id))
     session.execute(delete(PerformanceSnapshot).where(PerformanceSnapshot.model_id == profile_id))
@@ -432,3 +436,4 @@ def _minutes_to_hhmm(total_minutes: int) -> str:
     hour = normalized // 60
     minute = normalized % 60
     return f"{hour:02d}:{minute:02d}"
+

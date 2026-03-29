@@ -23,6 +23,7 @@ from app.api.query_service import (
     list_news_batches,
     list_portfolios,
     list_positions,
+    list_run_requests,
     list_rankings,
     list_snapshots,
     list_trades,
@@ -55,7 +56,7 @@ PERIOD_MAP = {
     "1 day": "return_1d_pct",
 }
 
-st.set_page_config(page_title="AI Stock Arena", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="AI Stock Arena", layout="wide", initial_sidebar_state="collapsed")
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -74,6 +75,7 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
                 "snapshots": client.get("/snapshots", params={"selected_only": str(selected_only).lower(), "limit": 2000}).json(),
                 "news": client.get("/news", params={"limit": 5}).json(),
                 "logs": client.get("/llm-logs", params={"limit": 1000}).json(),
+                "runs": client.get("/run-requests", params={"selected_only": str(selected_only).lower(), "limit": 300}).json(),
             }
 
     with SessionLocal() as session:
@@ -89,6 +91,7 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             "snapshots": [item.model_dump(mode="json") for item in list_snapshots(session=session, selected_only=selected_only, limit=2000)],
             "news": [item.model_dump(mode="json") for item in list_news_batches(session=session, limit=5)],
             "logs": [item.model_dump(mode="json") for item in list_llm_logs(session=session, limit=1000)],
+            "runs": [item.model_dump(mode="json") for item in list_run_requests(session=session, selected_only=selected_only, limit=300)],
         }
 
 
@@ -168,17 +171,7 @@ def inject_styles() -> None:
         [data-baseweb="tag"] span {
             max-width: none !important;
         }
-        .asa-sidebar-footer {
-            position: fixed;
-            left: 0;
-            bottom: 0;
-            width: min(20rem, 28vw);
-            padding: 12px 16px 14px 16px;
-            background: linear-gradient(180deg, rgba(10,15,28,0.0), rgba(10,15,28,0.98) 24%);
-            color: #94a3b8;
-            font-size: 0.82rem;
-            z-index: 999;
-        }
+        .asa-signature { color: #94a3b8; font: 500 0.92rem 'IBM Plex Sans', sans-serif; white-space: nowrap; }
         [data-testid="stTabs"] button {
             font-family: 'Space Grotesk', sans-serif;
             font-weight: 700;
@@ -307,7 +300,10 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
         f"""
         <section class="asa-hero">
             <div class="asa-eyebrow">Pure Model Benchmark</div>
-            <h1 class="asa-headline">AI Stock Arena</h1>
+            <div style="display:flex; align-items:flex-end; gap:14px; flex-wrap:wrap;">
+                <h1 class="asa-headline">AI Stock Arena</h1>
+                <div class="asa-signature">eljja1@gmail.com</div>
+            </div>
             <div class="asa-subhead">Rank LLMs by fee-adjusted return, drawdown, and execution cost. Same markets, same cadence, same rules.</div>
             <div class="asa-strip">
                 <div class="asa-stat"><div class="asa-stat-label">Cadence</div><div class="asa-stat-value">Every {settings_payload.get('decision_interval_minutes', 60)} min</div></div>
@@ -455,16 +451,17 @@ def render_podium_card(row: pd.Series, label: str, period_label: str, period_col
 
 inject_styles()
 
-api_base_url = st.sidebar.text_input(
-    "FastAPI base URL",
-    value=settings.api_base_url or "",
-    placeholder="http://127.0.0.1:8000",
-)
-selected_only = st.sidebar.checkbox("Selected models only", value=True)
-admin_token = st.sidebar.text_input("Admin token", value="", type="password")
-admin_mode = _is_admin(admin_token)
-if st.sidebar.button("Refresh"):
-    refresh_all()
+if "dashboard_api_base_url" not in st.session_state:
+    st.session_state["dashboard_api_base_url"] = settings.api_base_url or ""
+if "dashboard_selected_only" not in st.session_state:
+    st.session_state["dashboard_selected_only"] = True
+if "dashboard_admin_token" not in st.session_state:
+    st.session_state["dashboard_admin_token"] = ""
+if "dashboard_models" not in st.session_state:
+    st.session_state["dashboard_models"] = []
+
+api_base_url = str(st.session_state.get("dashboard_api_base_url", ""))
+selected_only = bool(st.session_state.get("dashboard_selected_only", True))
 
 payload = load_base_data(api_base_url or None, selected_only)
 overview = payload["overview"]
@@ -489,10 +486,16 @@ trades_df = pd.DataFrame(payload["trades"])
 snapshots_df = pd.DataFrame(payload["snapshots"])
 news_batches = payload["news"]
 logs_all_df = pd.DataFrame(payload.get("logs", []))
+runs_df = pd.DataFrame(payload.get("runs", []))
 
 model_options = models_df["model_id"].tolist() if not models_df.empty else []
 default_models = models_df.loc[models_df["is_selected"], "model_id"].tolist() if not models_df.empty else []
-chosen_models = st.sidebar.multiselect("Models", model_options, default=default_models or model_options)
+if not st.session_state.get("dashboard_models"):
+    st.session_state["dashboard_models"] = default_models or model_options
+chosen_models = [model_id for model_id in st.session_state.get("dashboard_models", []) if model_id in model_options]
+if not chosen_models and model_options:
+    chosen_models = default_models or model_options
+    st.session_state["dashboard_models"] = chosen_models
 if chosen_models:
     rankings_df = rankings_df[rankings_df["model_id"].isin(chosen_models)]
     portfolios_df = portfolios_df[portfolios_df["model_id"].isin(chosen_models)]
@@ -502,10 +505,10 @@ if chosen_models:
     models_df = models_df[models_df["model_id"].isin(chosen_models)]
     if not logs_all_df.empty:
         logs_all_df = logs_all_df[logs_all_df["model_id"].isin(chosen_models)]
+    if not runs_df.empty:
+        runs_df = runs_df[runs_df["model_id"].isin(chosen_models)]
 
 render_hero(settings_payload, scheduler_payload, rankings_df)
-
-st.sidebar.markdown('<div class="asa-sidebar-footer">Made by eljja1@gmail.com</div>', unsafe_allow_html=True)
 
 scheduler_df = pd.DataFrame(scheduler_payload.get("markets", []))
 
@@ -626,6 +629,7 @@ with detail_tab:
         detail_model = st.selectbox("Model", model_options, index=0)
         detail_market = st.selectbox("Market", ["KR", "US"], index=0)
         model_logs = load_model_logs(api_base_url or None, detail_model, detail_market)
+        model_runs = runs_df[(runs_df["model_id"] == detail_model) & (runs_df["market_code"] == detail_market)] if not runs_df.empty else pd.DataFrame()
         model_portfolios = portfolios_df[(portfolios_df["model_id"] == detail_model) & (portfolios_df["market_code"] == detail_market)]
         model_positions = positions_df[(positions_df["model_id"] == detail_model) & (positions_df["market_code"] == detail_market)]
         model_trades = trades_df[(trades_df["model_id"] == detail_model) & (trades_df["market_code"] == detail_market)]
@@ -646,6 +650,31 @@ with detail_tab:
             st.caption("No trades.")
         else:
             st.dataframe(model_trades.head(30), use_container_width=True, hide_index=True)
+        st.markdown("**Recent run activity**")
+        if model_runs.empty:
+            st.caption("No run requests yet.")
+        else:
+            st.dataframe(
+                model_runs[[
+                    "requested_at",
+                    "status",
+                    "trigger_source",
+                    "candidate_count",
+                    "summary_message",
+                    "error_message",
+                ]].rename(
+                    columns={
+                        "requested_at": "Requested at",
+                        "status": "Status",
+                        "trigger_source": "Trigger",
+                        "candidate_count": "Candidates",
+                        "summary_message": "Summary",
+                        "error_message": "Error",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
         st.markdown("**Latest LLM input/output**")
         logs_df = pd.DataFrame(model_logs)
         if logs_df.empty:
@@ -692,10 +721,19 @@ with detail_tab:
 
 with admin_tab:
     st.markdown('<div class="asa-section-label">Admin Controls</div>', unsafe_allow_html=True)
+    st.text_input("Admin token", type="password", key="dashboard_admin_token", help="Press Enter to apply.")
+    st.text_input("FastAPI base URL", key="dashboard_api_base_url", placeholder="http://127.0.0.1:8000")
+    st.checkbox("Selected models only", key="dashboard_selected_only")
+    st.multiselect("Visible models", model_options, key="dashboard_models")
+    if st.button("Refresh data"):
+        refresh_all()
+        st.rerun()
+    current_admin_token = str(st.session_state.get("dashboard_admin_token", ""))
+    admin_mode = _is_admin(current_admin_token)
     if not settings.admin_token:
         st.warning("ADMIN_TOKEN is not configured. Admin actions are disabled.")
     elif not admin_mode:
-        st.info("Enter the correct admin token in the sidebar to unlock settings, reset, and model management.")
+        st.info("Enter the correct admin token above and press Enter to unlock admin actions.")
     else:
         st.success("Admin mode enabled")
         with st.form("runtime_settings_form"):
@@ -730,7 +768,7 @@ with admin_tab:
                 }
                 if api_base_url:
                     with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-                        client.put("/admin/settings", headers={"X-Admin-Token": admin_token}, json=payload).raise_for_status()
+                        client.put("/admin/settings", headers={"X-Admin-Token": current_admin_token}, json=payload).raise_for_status()
                 else:
                     with SessionLocal() as session:
                         update_runtime_settings(session, payload)
@@ -747,7 +785,7 @@ with admin_tab:
                 with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
                     client.patch(
                         f"/admin/models/{visibility_target}/selection",
-                        headers={"X-Admin-Token": admin_token},
+                        headers={"X-Admin-Token": current_admin_token},
                         json={"is_selected": keep_selected},
                     ).raise_for_status()
             else:
@@ -779,7 +817,7 @@ with admin_tab:
                 }
                 if api_base_url:
                     with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-                        client.post("/admin/models", headers={"X-Admin-Token": admin_token}, json=payload).raise_for_status()
+                        client.post("/admin/models", headers={"X-Admin-Token": current_admin_token}, json=payload).raise_for_status()
                 else:
                     with SessionLocal() as session:
                         create_or_update_model_profile(
@@ -795,6 +833,34 @@ with admin_tab:
                         session.commit()
                 refresh_all()
                 st.rerun()
+
+        if not runs_df.empty:
+            st.markdown("**Recent run queue**")
+            st.dataframe(
+                runs_df[[
+                    "requested_at",
+                    "model_id",
+                    "market_code",
+                    "status",
+                    "trigger_source",
+                    "candidate_count",
+                    "summary_message",
+                    "error_message",
+                ]].rename(
+                    columns={
+                        "requested_at": "Requested at",
+                        "model_id": "Model",
+                        "market_code": "Market",
+                        "status": "Status",
+                        "trigger_source": "Trigger",
+                        "candidate_count": "Candidates",
+                        "summary_message": "Summary",
+                        "error_message": "Error",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
 
         if not scheduler_df.empty:
             st.markdown("**Scheduler status**")
@@ -821,11 +887,12 @@ with admin_tab:
         if st.button("Reset all trading data and restart", type="primary"):
             if api_base_url:
                 with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-                    client.post("/admin/reset", headers={"X-Admin-Token": admin_token}, params={"reset_prompts": "true"}).raise_for_status()
+                    client.post("/admin/reset", headers={"X-Admin-Token": current_admin_token}, params={"reset_prompts": "true"}).raise_for_status()
             else:
                 with SessionLocal() as session:
                     reset_simulation(session, reset_prompts=True)
                     session.commit()
             refresh_all()
             st.rerun()
+
 

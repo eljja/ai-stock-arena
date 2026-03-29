@@ -12,6 +12,7 @@ from app.api.schemas import (
     CopyTradeResponse,
     LLMDecisionLogSummary,
     ModelRanking,
+    RunRequestSummary,
     ModelSummary,
     NewsBatchSummary,
     NewsItemSummary,
@@ -30,6 +31,7 @@ from app.db.models import (
     PerformanceSnapshot,
     Portfolio,
     Position,
+    RunRequest,
     SharedNewsBatch,
     SharedNewsItem,
     Trade,
@@ -358,6 +360,42 @@ def list_llm_logs(
     ]
 
 
+def list_run_requests(
+    session: Session,
+    model_id: str | None = None,
+    market_code: str | None = None,
+    status: str | None = None,
+    selected_only: bool = False,
+    limit: int = 50,
+) -> list[RunRequestSummary]:
+    stmt = select(RunRequest).order_by(RunRequest.requested_at.desc(), RunRequest.id.desc())
+    if model_id:
+        stmt = stmt.where(RunRequest.model_id == model_id)
+    if market_code:
+        stmt = stmt.where(RunRequest.market_code == market_code)
+    if status:
+        stmt = stmt.where(RunRequest.status == status)
+    if selected_only:
+        stmt = stmt.join(LLMModel, LLMModel.model_id == RunRequest.model_id).where(LLMModel.is_selected.is_(True))
+    runs = session.scalars(stmt.limit(limit)).all()
+    return [
+        RunRequestSummary(
+            id=run.id,
+            model_id=run.model_id,
+            market_code=run.market_code,
+            trigger_source=run.trigger_source,
+            status=run.status,
+            candidate_count=run.candidate_count,
+            snapshot_as_of=run.snapshot_as_of,
+            requested_at=run.requested_at,
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+            summary_message=run.summary_message,
+            error_message=run.error_message,
+        )
+        for run in runs
+    ]
+
 def get_copy_trade(session: Session, model_id: str, market_code: str) -> CopyTradeResponse:
     portfolio = session.scalar(
         select(Portfolio).where(Portfolio.model_id == model_id, Portfolio.market_code == market_code)
@@ -607,3 +645,8 @@ def _log_float(log: LLMDecisionLog, key: str) -> float | None:
     if value in (None, ""):
         return None
     return float(value)
+
+
+
+
+
