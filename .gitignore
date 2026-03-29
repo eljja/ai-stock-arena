@@ -6,7 +6,8 @@ venv/
 *.db
 *.sqlite3
 *.log
-.streamlit/
+.streamlit/*
+!.streamlit/config.toml
 .idea/
 .vscode/
 *.egg-info/

@@ -118,6 +118,79 @@ def probe_and_select_free_models(
     return results
 
 
+def probe_and_add_free_models(
+    session: Session,
+    additional_count: int = 10,
+    candidate_limit: int = 40,
+    sort_by: str = "popular",
+) -> list[ModelProbeResult]:
+    client = OpenRouterClient()
+    raw_catalog = client.catalog(sort_by=sort_by, free_mode="only")
+    deduped_catalog: list[OpenRouterModel] = []
+    seen_model_ids: set[str] = set()
+    for model in raw_catalog:
+        if model.model_id in seen_model_ids:
+            continue
+        deduped_catalog.append(model)
+        seen_model_ids.add(model.model_id)
+
+    selected_model_ids = {
+        model.model_id
+        for model in session.scalars(select(LLMModel).where(LLMModel.is_selected.is_(True))).all()
+    }
+
+    catalog = [model for model in deduped_catalog if model.model_id not in selected_model_ids][:candidate_limit]
+
+    results: list[ModelProbeResult] = []
+    added_count = 0
+    for external_model in catalog:
+        success, detail = client.probe_model(external_model.model_id)
+        if not success:
+            existing = session.scalar(select(LLMModel).where(LLMModel.model_id == external_model.model_id))
+            if existing is not None:
+                existing.is_available = False
+                metadata = existing.metadata_json or {}
+                metadata.update({"probe": {"success": success, "detail": detail}, "probe_detail": detail})
+                existing.metadata_json = metadata
+            results.append(ModelProbeResult(external_model.model_id, success, detail))
+            continue
+
+        create_or_update_model_profile(
+            session,
+            profile_id=external_model.model_id,
+            request_model_id=external_model.model_id,
+            display_name=external_model.display_name,
+            provider="openrouter",
+            search_mode="off",
+            select_profile=True,
+            prompt_price_per_million=external_model.prompt_price_per_million,
+            completion_price_per_million=external_model.completion_price_per_million,
+            context_length=external_model.context_length,
+            api_enabled=True,
+        )
+        model_record = session.scalar(select(LLMModel).where(LLMModel.model_id == external_model.model_id))
+        if model_record is not None:
+            metadata = model_record.metadata_json or {}
+            metadata.update({
+                "probe": {"success": success, "detail": detail},
+                "probe_detail": detail,
+                "is_free_like": external_model.is_free_like,
+                "pricing_label": external_model.pricing_label,
+            })
+            model_record.metadata_json = metadata
+            model_record.is_available = True
+            model_record.is_selected = True
+        results.append(ModelProbeResult(external_model.model_id, success, detail))
+        added_count += 1
+        if added_count >= additional_count:
+            break
+
+    session.flush()
+    initialize_selected_model_state(session)
+    session.commit()
+    return results
+
+
 def upsert_openrouter_model(
     session: Session,
     external_model: OpenRouterModel,

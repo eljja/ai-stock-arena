@@ -290,10 +290,16 @@ def inject_styles() -> None:
         .stSelectbox [data-baseweb="select"] > div,
         .stMultiSelect [data-baseweb="select"] > div,
         .stTextInput [data-baseweb="input"] > div,
+        .stTextInput input,
         .stNumberInput [data-baseweb="input"] > div,
+        .stNumberInput input,
         .stTextArea textarea,
-        .stDateInput [data-baseweb="input"] > div {
-            background: rgba(15, 23, 42, 0.86) !important;
+        .stDateInput [data-baseweb="input"] > div,
+        .stDateInput input,
+        [data-testid="stDataEditor"] [data-baseweb="input"] > div,
+        [data-testid="stDataEditor"] input,
+        [data-testid="stDataEditor"] textarea {
+            background: rgba(15, 23, 42, 0.92) !important;
             border: 1px solid rgba(148, 163, 184, 0.22) !important;
             color: #eef2ff !important;
         }
@@ -309,6 +315,58 @@ def inject_styles() -> None:
         }
         [role="option"][aria-selected="true"] {
             background: rgba(59, 130, 246, 0.18) !important;
+        }
+        .stButton > button,
+        .stDownloadButton > button,
+        .stFormSubmitButton > button,
+        [data-testid="baseButton-secondary"],
+        [data-testid="baseButton-primary"],
+        [data-testid="stBaseButton-secondary"],
+        [data-testid="stBaseButton-primary"] {
+            background: linear-gradient(180deg, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.96)) !important;
+            color: #f8fafc !important;
+            border: 1px solid rgba(148, 163, 184, 0.24) !important;
+            box-shadow: none !important;
+        }
+        .stButton > button:hover,
+        .stDownloadButton > button:hover,
+        .stFormSubmitButton > button:hover,
+        [data-testid="baseButton-secondary"]:hover,
+        [data-testid="baseButton-primary"]:hover,
+        [data-testid="stBaseButton-secondary"]:hover,
+        [data-testid="stBaseButton-primary"]:hover {
+            border-color: rgba(96, 165, 250, 0.45) !important;
+            color: #ffffff !important;
+        }
+        .stCheckbox label,
+        .stRadio label,
+        .stToggle label,
+        .stSlider label,
+        .stSelectbox label,
+        .stMultiSelect label,
+        .stTextInput label,
+        .stNumberInput label,
+        .stTextArea label,
+        .stDateInput label {
+            color: #dbeafe !important;
+        }
+        [data-testid="stDataEditor"],
+        [data-testid="stDataEditor"] [role="grid"],
+        [data-testid="stDataEditor"] [role="rowgroup"],
+        [data-testid="stDataEditor"] [role="row"],
+        [data-testid="stDataEditor"] [role="columnheader"],
+        [data-testid="stDataEditor"] [role="gridcell"],
+        [data-testid="stDataEditor"] [data-testid="stDataFrameResizable"] {
+            background: rgba(15, 23, 42, 0.94) !important;
+            color: #e2e8f0 !important;
+            border-color: rgba(148, 163, 184, 0.12) !important;
+        }
+        [data-testid="stDataEditor"] [role="columnheader"] {
+            background: rgba(30, 41, 59, 0.96) !important;
+            color: #f8fafc !important;
+        }
+        [data-testid="stDataFrameGlideDataEditor"] * {
+            color: inherit !important;
         }
         [data-testid="stDataFrame"],
         [data-testid="stTable"] {
@@ -1266,7 +1324,7 @@ with admin_tab:
                 "News collection policy",
                 ["development_fallback", "live_strict"],
                 index=0 if str(settings_payload.get("news_collection_policy", "development_fallback")) == "development_fallback" else 1,
-                help="development_fallback keeps wider local testing fallback windows. live_strict uses only the current 15-minute window inside the active runtime window.",
+                help="development_fallback keeps wider local testing fallback windows. live_strict uses only the current 30-minute window inside the active runtime window.",
             )
             st.markdown("**Runtime windows (UTC)**")
             kr_window = market_windows.get("KR", {})

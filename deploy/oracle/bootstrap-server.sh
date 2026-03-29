@@ -27,7 +27,7 @@ $PYTHON_BIN -m venv .venv
 ./.venv/bin/python -m pip install --upgrade pip
 ./.venv/bin/python -m pip install -r requirements.txt
 
-chmod +x scripts/linux/run-api.sh scripts/linux/run-dashboard.sh scripts/linux/run-scheduler.sh
+chmod +x scripts/linux/run-api.sh scripts/linux/run-dashboard.sh scripts/linux/run-scheduler.sh scripts/linux/add-free-models.sh
 
 if [ ! -f "$ENV_FILE" ]; then
   sudo cp .env.example "$ENV_FILE"

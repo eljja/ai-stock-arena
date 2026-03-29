@@ -117,7 +117,18 @@ cd /opt/ai-stock-arena/current
 bash deploy/oracle/deploy-update.sh
 ```
 
-## 9. Notes
+## 9. Add More Free Models
+
+After the initial deployment, you can add more successful free OpenRouter profiles without replacing the current selected set:
+
+```bash
+cd /opt/ai-stock-arena/current
+bash scripts/linux/add-free-models.sh 10 40 popular
+```
+
+This keeps the current selected models and probes additional free candidates one by one.
+
+## 10. Notes
 
 - Scheduler behavior is controlled from the admin panel and stored in the database.
 - News is disabled by default in the pure benchmark configuration.
