@@ -11,10 +11,10 @@ from app.news.marketaux import MarketauxNewsClient, MarketauxNewsItem
 from app.services.admin import get_runtime_settings, get_scheduler_status
 
 NEWS_STATE_KEY = "shared_news_state"
-DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES = 15
+DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES = 30
 RECENT_DEDUPE_HOURS = 24
 CONTEXT_LOOKBACK_MINUTES = 60
-DEFAULT_NEWS_MODE = "shared_marketaux_15m"
+DEFAULT_NEWS_MODE = "shared_marketaux_30m"
 DEVELOPMENT_FALLBACK = "development_fallback"
 LIVE_STRICT = "live_strict"
 
@@ -114,7 +114,7 @@ def refresh_shared_news_for_market(session: Session, market_code: str) -> str:
     window_end = datetime.now(UTC)
     recent_keys = _recent_news_keys(session, market_code, now=window_end)
     articles: list[MarketauxNewsItem] = []
-    selected_window_label = "15m"
+    selected_window_label = f"{DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES}m"
     max_pages = 2 if collection_policy == LIVE_STRICT else 4
 
     for window_start, window_label in _candidate_news_windows(session, market_code, now=window_end, collection_policy=collection_policy):
@@ -226,16 +226,16 @@ def _news_window_start(session: Session, market_code: str, *, now: datetime) -> 
     market_state = state.get("markets", {}).get(market_code, {})
     last_completed_at = _deserialize_datetime(market_state.get("last_completed_at"))
     if last_completed_at is None:
-        return now - timedelta(minutes=15)
-    return max(last_completed_at - timedelta(minutes=2), now - timedelta(minutes=15))
+        return now - timedelta(minutes=DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES)
+    return max(last_completed_at - timedelta(minutes=2), now - timedelta(minutes=DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES))
 
 
 def _candidate_news_windows(session: Session, market_code: str, *, now: datetime, collection_policy: str) -> list[tuple[datetime, str]]:
     primary_start = _news_window_start(session, market_code, now=now)
     if collection_policy == LIVE_STRICT:
-        return [(primary_start, "15m")]
+        return [(primary_start, f"{DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES}m")]
     return [
-        (primary_start, "15m"),
+        (primary_start, f"{DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES}m"),
         (now - timedelta(hours=1), "1h"),
         (now - timedelta(hours=6), "6h"),
         (now - timedelta(hours=24), "24h"),

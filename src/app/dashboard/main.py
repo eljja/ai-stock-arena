@@ -287,6 +287,48 @@ def inject_styles() -> None:
         [data-baseweb="tag"] span {
             max-width: none !important;
         }
+        .stSelectbox [data-baseweb="select"] > div,
+        .stMultiSelect [data-baseweb="select"] > div,
+        .stTextInput [data-baseweb="input"] > div,
+        .stNumberInput [data-baseweb="input"] > div,
+        .stTextArea textarea,
+        .stDateInput [data-baseweb="input"] > div {
+            background: rgba(15, 23, 42, 0.86) !important;
+            border: 1px solid rgba(148, 163, 184, 0.22) !important;
+            color: #eef2ff !important;
+        }
+        [data-baseweb="popover"],
+        [role="listbox"] {
+            background: rgba(15, 23, 42, 0.98) !important;
+            color: #eef2ff !important;
+            border: 1px solid rgba(148, 163, 184, 0.22) !important;
+        }
+        [role="option"] {
+            background: transparent !important;
+            color: #e2e8f0 !important;
+        }
+        [role="option"][aria-selected="true"] {
+            background: rgba(59, 130, 246, 0.18) !important;
+        }
+        [data-testid="stDataFrame"],
+        [data-testid="stTable"] {
+            background: rgba(15, 23, 42, 0.58) !important;
+            border: 1px solid rgba(148, 163, 184, 0.16) !important;
+            border-radius: 16px !important;
+        }
+        [data-testid="stDataFrame"] [role="grid"],
+        [data-testid="stDataFrame"] [role="rowgroup"],
+        [data-testid="stDataFrame"] [role="row"],
+        [data-testid="stDataFrame"] [role="columnheader"],
+        [data-testid="stDataFrame"] [role="gridcell"] {
+            background: rgba(15, 23, 42, 0.92) !important;
+            color: #e2e8f0 !important;
+            border-color: rgba(148, 163, 184, 0.12) !important;
+        }
+        [data-testid="stDataFrame"] [role="columnheader"] {
+            background: rgba(30, 41, 59, 0.95) !important;
+            color: #f8fafc !important;
+        }
         .asa-signature { color: #94a3b8; font: 500 0.92rem 'IBM Plex Sans', sans-serif; white-space: nowrap; }
         [data-testid="stTabs"] button {
             font-family: 'Space Grotesk', sans-serif;
@@ -822,7 +864,7 @@ settings_payload = payload["settings"] or {
     "news_enabled": False,
     "news_mode": "shared_off",
     "news_collection_policy": "development_fallback",
-    "news_refresh_interval_minutes": 15,
+    "news_refresh_interval_minutes": 30,
 }
 scheduler_payload = payload.get("scheduler") or {"markets": []}
 market_windows = settings_payload.get("markets", {})
@@ -1170,7 +1212,7 @@ with admin_tab:
         )
         runtime_cols = st.columns([1.2, 1.2, 1.6])
         runtime_cols[0].metric("Trade cadence", f"{int(settings_payload.get('decision_interval_minutes', 60))} min")
-        runtime_cols[1].metric("News refresh cadence", f"{int(settings_payload.get('news_refresh_interval_minutes', 15))} min")
+        runtime_cols[1].metric("News refresh cadence", f"{int(settings_payload.get('news_refresh_interval_minutes', 30))} min")
         runtime_cols[2].metric("News policy", str(settings_payload.get("news_collection_policy", "development_fallback")))
 
         if not scheduler_admin_df.empty:
@@ -1210,7 +1252,7 @@ with admin_tab:
                 min_value=1,
                 max_value=120,
                 step=1,
-                value=int(settings_payload.get("news_refresh_interval_minutes", 15)),
+                value=int(settings_payload.get("news_refresh_interval_minutes", 30)),
             )
             weekday_defaults = settings_payload.get("active_weekdays", [0, 1, 2, 3, 4])
             active_weekdays = st.multiselect(

@@ -40,7 +40,7 @@ DEFAULT_RUNTIME_SETTINGS = {
     "news_enabled": False,
     "news_mode": "shared_off",
     "news_collection_policy": "development_fallback",
-    "news_refresh_interval_minutes": 15,
+    "news_refresh_interval_minutes": 30,
 }
 
 DEFAULT_SCHEDULER_ENTRY = {
@@ -66,7 +66,7 @@ def get_runtime_settings(session: Session) -> dict:
         return {**default_settings}
 
     value = {**DEFAULT_RUNTIME_SETTINGS, **(setting.value_json or {})}
-    value["news_refresh_interval_minutes"] = int(value.get("news_refresh_interval_minutes") or 15)
+    value["news_refresh_interval_minutes"] = int(value.get("news_refresh_interval_minutes") or 30)
     value["news_collection_policy"] = value.get("news_collection_policy") or default_news_collection_policy()
     markets = {**DEFAULT_RUNTIME_SETTINGS.get("markets", {}), **(value.get("markets", {}))}
     changed = False
@@ -90,7 +90,7 @@ def get_runtime_settings(session: Session) -> dict:
 def update_runtime_settings(session: Session, payload: dict) -> dict:
     current = get_runtime_settings(session)
     merged = {**current, **payload}
-    merged["news_refresh_interval_minutes"] = int(merged.get("news_refresh_interval_minutes") or 15)
+    merged["news_refresh_interval_minutes"] = int(merged.get("news_refresh_interval_minutes") or 30)
     merged["news_collection_policy"] = merged.get("news_collection_policy") or default_news_collection_policy()
     if "markets" in payload:
         merged["markets"] = {**current.get("markets", {}), **payload["markets"]}

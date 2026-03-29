@@ -132,7 +132,7 @@ class OpenRouterClient:
             system_prompt=JSON_SYSTEM_PROMPT,
             temperature=0.2,
         )
-        payload = _extract_json_object(completion.content)
+        payload = _normalize_decision_payload(_extract_json_object(completion.content))
         decision = TradingDecision.model_validate(payload)
         decision.raw_response = completion.content
         decision.prompt_tokens = completion.prompt_tokens
@@ -282,6 +282,81 @@ def _extract_json_object(raw_text: str) -> dict:
     if start == -1 or end == -1 or end <= start:
         raise ValueError("Model response did not contain a JSON object.")
     return json.loads(raw_text[start : end + 1])
+
+
+
+def _normalize_decision_payload(payload: dict) -> dict:
+    normalized = dict(payload or {})
+
+    if "instructions" not in normalized:
+        instructions: list[dict] = []
+        for item in normalized.get("buy_orders", []) or []:
+            instructions.append(
+                {
+                    "ticker": item.get("ticker"),
+                    "action": "BUY",
+                    "quantity": item.get("quantity"),
+                    "cash_amount": item.get("cash_amount"),
+                    "confidence": item.get("confidence", 0.5),
+                    "thesis": item.get("reason") or item.get("thesis") or "Buy signal.",
+                }
+            )
+        for item in normalized.get("sell_orders", []) or []:
+            instructions.append(
+                {
+                    "ticker": item.get("ticker"),
+                    "action": "SELL",
+                    "quantity": item.get("quantity"),
+                    "cash_amount": None,
+                    "confidence": item.get("confidence", 0.5),
+                    "thesis": item.get("reason") or item.get("thesis") or "Sell signal.",
+                }
+            )
+        normalized["instructions"] = instructions
+
+    normalized.setdefault("market_summary", normalized.get("reasoning") or normalized.get("market_outlook") or "No summary provided.")
+    normalized.setdefault("risk_note", normalized.get("news_sentiment") or "Risk not provided.")
+    normalized.setdefault("hold_tickers", normalized.get("hold_tickers") or [])
+    normalized.setdefault("rejected_tickers", normalized.get("rejected_tickers") or [])
+
+    clean_instructions: list[dict] = []
+    for item in normalized.get("instructions", []) or []:
+        if not isinstance(item, dict):
+            continue
+        action = str(item.get("action") or "").upper().strip()
+        if action not in {"BUY", "SELL", "HOLD"}:
+            continue
+        ticker = str(item.get("ticker") or "").strip().upper()
+        if not ticker:
+            continue
+        quantity = item.get("quantity")
+        cash_amount = item.get("cash_amount")
+        try:
+            quantity = int(float(quantity)) if quantity not in (None, "") else None
+        except Exception:
+            quantity = None
+        try:
+            cash_amount = float(cash_amount) if cash_amount not in (None, "") else None
+        except Exception:
+            cash_amount = None
+        try:
+            confidence = float(item.get("confidence", 0.5))
+        except Exception:
+            confidence = 0.5
+        confidence = max(0.0, min(1.0, confidence))
+        thesis = str(item.get("thesis") or item.get("reason") or "No thesis provided.").strip() or "No thesis provided."
+        clean_instructions.append(
+            {
+                "ticker": ticker,
+                "action": action,
+                "quantity": quantity,
+                "cash_amount": cash_amount,
+                "confidence": confidence,
+                "thesis": thesis,
+            }
+        )
+    normalized["instructions"] = clean_instructions
+    return normalized
 
 
 def _meta_prompt_request(market_code: str) -> str:

@@ -65,7 +65,7 @@ class TradingCycleService:
             positions=position_payload,
             candidates=candidates,
             snapshot=snapshot,
-            news_items=news_headlines,
+            news_items=_news_headline_payload(news_payload),
         )
         model_record = session.scalar(select(LLMModel).where(LLMModel.model_id == model_id))
         request_model_id = _resolve_request_model_id(session, model_id)
