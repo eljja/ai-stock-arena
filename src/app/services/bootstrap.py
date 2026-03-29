@@ -10,7 +10,7 @@ from app.db.base import Base
 from app.db.models import LLMModel, MarketSetting, ModelMarketPrompt, Portfolio
 from app.db.session import engine
 from app.llm.openrouter import OpenRouterClient, OpenRouterModel
-from app.services.admin import get_runtime_settings
+from app.services.admin import create_or_update_model_profile, get_runtime_settings
 
 MARKET_LABELS = {
     "KR": "Korea Equity Market",
