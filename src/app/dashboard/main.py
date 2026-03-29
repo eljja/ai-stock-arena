@@ -161,6 +161,16 @@ def refresh_all() -> None:
     load_model_logs.clear()
 
 
+
+
+def _frame_with_columns(rows: object, columns: list[str]) -> pd.DataFrame:
+    frame = pd.DataFrame(rows or [])
+    for column in columns:
+        if column not in frame.columns:
+            frame[column] = pd.Series(dtype="object")
+    return frame
+
+
 def _money(value: float | None) -> str:
     if value is None:
         return "n/a"
@@ -747,6 +757,9 @@ def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models:
 
 
 def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
+    required = {"model_id", "market_code", "created_at", "side", "gross_amount"}
+    if trades_df.empty or not required.issubset(trades_df.columns):
+        return None
     filtered_trades = trades_df.copy()
     if market_filter != "All":
         filtered_trades = filtered_trades[filtered_trades["market_code"] == market_filter]
@@ -788,9 +801,11 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
 
 
 def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
+    trade_required = {"model_id", "market_code", "created_at", "commission_amount", "tax_amount", "regulatory_fee_amount"}
+    log_required = {"model_id", "market_code", "created_at", "estimated_cost_usd"}
     frames: list[pd.DataFrame] = []
-    filtered_trades = trades_df.copy()
-    filtered_logs = logs_df.copy() if not logs_df.empty else pd.DataFrame()
+    filtered_trades = trades_df.copy() if trade_required.issubset(trades_df.columns) else pd.DataFrame()
+    filtered_logs = logs_df.copy() if (not logs_df.empty and log_required.issubset(logs_df.columns)) else pd.DataFrame()
     if market_filter != "All":
         filtered_trades = filtered_trades[filtered_trades["market_code"] == market_filter]
         if not filtered_logs.empty:
@@ -928,15 +943,15 @@ settings_payload = payload["settings"] or {
 scheduler_payload = payload.get("scheduler") or {"markets": []}
 market_windows = settings_payload.get("markets", {})
 
-models_df = pd.DataFrame(payload["models"])
-rankings_df = pd.DataFrame(payload["rankings"])
-portfolios_df = pd.DataFrame(payload["portfolios"])
-positions_df = pd.DataFrame(payload["positions"])
-trades_df = pd.DataFrame(payload["trades"])
-snapshots_df = pd.DataFrame(payload["snapshots"])
+models_df = _frame_with_columns(payload["models"], ["model_id", "display_name", "is_selected", "api_enabled"])
+rankings_df = _frame_with_columns(payload["rankings"], ["model_id", "display_name", "current_return_pct", "kr_return_pct", "us_return_pct", "trade_count", "llm_cost_usd", "pricing_label"])
+portfolios_df = _frame_with_columns(payload["portfolios"], ["model_id", "market_code", "currency", "available_cash", "total_equity"])
+positions_df = _frame_with_columns(payload["positions"], ["model_id", "market_code", "ticker", "instrument_name", "quantity", "market_value", "avg_entry_price", "current_price"])
+trades_df = _frame_with_columns(payload["trades"], ["model_id", "market_code", "created_at", "ticker", "side", "gross_amount", "commission_amount", "tax_amount", "regulatory_fee_amount"])
+snapshots_df = _frame_with_columns(payload["snapshots"], ["model_id", "market_code", "created_at", "total_return_pct", "total_equity"])
 news_batches = payload["news"]
-logs_all_df = pd.DataFrame(payload.get("logs", []))
-runs_df = pd.DataFrame(payload.get("runs", []))
+logs_all_df = _frame_with_columns(payload.get("logs", []), ["model_id", "market_code", "created_at", "estimated_cost_usd"])
+runs_df = _frame_with_columns(payload.get("runs", []), ["model_id", "market_code", "requested_at", "started_at", "completed_at", "snapshot_as_of", "status", "summary_message", "error_message"])
 
 model_options = models_df["model_id"].tolist() if not models_df.empty else []
 default_models = models_df.loc[models_df["is_selected"], "model_id"].tolist() if not models_df.empty else []
