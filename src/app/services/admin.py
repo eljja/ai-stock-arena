@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.config.loader import load_settings
 from app.db.models import (
     AdminSetting,
     LLMDecisionLog,
@@ -33,11 +34,13 @@ DEFAULT_RUNTIME_SETTINGS = {
     "decision_interval_minutes": 60,
     "active_weekdays": [0, 1, 2, 3, 4],
     "markets": {
-        "KR": {"enabled": True, "window_start": "08:00", "window_end": "16:00"},
-        "US": {"enabled": True, "window_start": "08:00", "window_end": "17:00"},
+        "KR": {"enabled": True, "window_start": "08:00", "window_end": "16:00", "window_start_utc": "23:00", "window_end_utc": "07:00"},
+        "US": {"enabled": True, "window_start": "08:00", "window_end": "17:00", "window_start_utc": "12:00", "window_end_utc": "22:00"},
     },
     "news_enabled": False,
     "news_mode": "shared_off",
+    "news_collection_policy": "development_fallback",
+    "news_refresh_interval_minutes": 15,
 }
 
 DEFAULT_SCHEDULER_ENTRY = {
@@ -48,21 +51,34 @@ DEFAULT_SCHEDULER_ENTRY = {
 }
 
 
+def default_news_collection_policy() -> str:
+    settings = load_settings()
+    return "development_fallback" if settings.database_url.startswith("sqlite") else "live_strict"
+
+
 def get_runtime_settings(session: Session) -> dict:
     setting = session.scalar(select(AdminSetting).where(AdminSetting.key == RUNTIME_SETTINGS_KEY))
     if setting is None:
-        setting = AdminSetting(key=RUNTIME_SETTINGS_KEY, value_json=DEFAULT_RUNTIME_SETTINGS.copy())
+        default_settings = {**DEFAULT_RUNTIME_SETTINGS, "news_collection_policy": default_news_collection_policy()}
+        setting = AdminSetting(key=RUNTIME_SETTINGS_KEY, value_json=default_settings)
         session.add(setting)
         session.flush()
-        return {**DEFAULT_RUNTIME_SETTINGS}
+        return {**default_settings}
 
     value = {**DEFAULT_RUNTIME_SETTINGS, **(setting.value_json or {})}
+    value["news_refresh_interval_minutes"] = int(value.get("news_refresh_interval_minutes") or 15)
+    value["news_collection_policy"] = value.get("news_collection_policy") or default_news_collection_policy()
     markets = {**DEFAULT_RUNTIME_SETTINGS.get("markets", {}), **(value.get("markets", {}))}
     changed = False
     us_window = markets.get("US", {})
     if us_window.get("window_start") == "08:30" and us_window.get("window_end") == "16:30":
         markets["US"] = {**us_window, "window_start": "08:00", "window_end": "17:00"}
         changed = True
+    for market_code, defaults in DEFAULT_RUNTIME_SETTINGS.get("markets", {}).items():
+        market_config = {**defaults, **markets.get(market_code, {})}
+        market_config["window_start_utc"] = market_config.get("window_start_utc") or defaults.get("window_start_utc")
+        market_config["window_end_utc"] = market_config.get("window_end_utc") or defaults.get("window_end_utc")
+        markets[market_code] = market_config
     value["markets"] = markets
     if changed:
         setting.value_json = value
@@ -74,6 +90,8 @@ def get_runtime_settings(session: Session) -> dict:
 def update_runtime_settings(session: Session, payload: dict) -> dict:
     current = get_runtime_settings(session)
     merged = {**current, **payload}
+    merged["news_refresh_interval_minutes"] = int(merged.get("news_refresh_interval_minutes") or 15)
+    merged["news_collection_policy"] = merged.get("news_collection_policy") or default_news_collection_policy()
     if "markets" in payload:
         merged["markets"] = {**current.get("markets", {}), **payload["markets"]}
     setting = session.scalar(select(AdminSetting).where(AdminSetting.key == RUNTIME_SETTINGS_KEY))
@@ -164,7 +182,7 @@ def get_scheduler_status(session: Session, now: datetime | None = None) -> dict:
         entry = {**DEFAULT_SCHEDULER_ENTRY, **state.get("markets", {}).get(market_code, {})}
         last_started_at = _deserialize_datetime(entry.get("last_started_at"))
         last_completed_at = _deserialize_datetime(entry.get("last_completed_at"))
-        in_active_window = enabled and _is_market_active(local_now, config, active_weekdays)
+        in_active_window = enabled and _is_market_active(current_utc, local_now, config, active_weekdays)
         cadence_delta = timedelta(minutes=cadence_minutes)
         is_due = in_active_window and (last_started_at is None or current_utc >= (last_started_at + cadence_delta))
         next_run_at = _compute_next_run(
@@ -433,12 +451,19 @@ def _time_in_window(current_time: time, start_time: time, end_time: time) -> boo
     return current_time >= start_time or current_time <= end_time
 
 
-def _is_market_active(local_now: datetime, config: dict, active_weekdays: list[int]) -> bool:
+def _utc_window_times(config: dict) -> tuple[time, time]:
+    start_text = config.get("window_start_utc")
+    end_text = config.get("window_end_utc")
+    if start_text and end_text:
+        return _parse_hhmm(start_text), _parse_hhmm(end_text)
+    return _parse_hhmm(config.get("window_start", "00:00")), _parse_hhmm(config.get("window_end", "23:59"))
+
+
+def _is_market_active(now_utc: datetime, local_now: datetime, config: dict, active_weekdays: list[int]) -> bool:
     if local_now.weekday() not in active_weekdays:
         return False
-    start_time = _parse_hhmm(config.get("window_start", "00:00"))
-    end_time = _parse_hhmm(config.get("window_end", "23:59"))
-    return _time_in_window(local_now.timetz().replace(tzinfo=None), start_time, end_time)
+    start_time, end_time = _utc_window_times(config)
+    return _time_in_window(now_utc.timetz().replace(tzinfo=None), start_time, end_time)
 
 
 def _compute_next_run(
@@ -452,48 +477,21 @@ def _compute_next_run(
     if not config.get("enabled", True) or not active_weekdays:
         return None
 
-    local_now = now_utc.astimezone(timezone)
-    start_time = _parse_hhmm(config.get("window_start", "00:00"))
-    end_time = _parse_hhmm(config.get("window_end", "23:59"))
-    today = local_now.date()
-
-    if local_now.weekday() in active_weekdays:
-        today_start = datetime.combine(today, start_time, tzinfo=timezone)
-        if local_now.timetz().replace(tzinfo=None) < start_time:
-            return today_start.astimezone(UTC)
-        if _time_in_window(local_now.timetz().replace(tzinfo=None), start_time, end_time):
-            if last_started_at is None or now_utc >= last_started_at + cadence_delta:
-                return now_utc
-            candidate = last_started_at + cadence_delta
-            candidate_local = candidate.astimezone(timezone)
-            if candidate_local.date() == today and _time_in_window(candidate_local.timetz().replace(tzinfo=None), start_time, end_time):
-                return candidate.astimezone(UTC)
-
-    for day_offset in range(1, 15):
-        next_day = today + timedelta(days=day_offset)
-        if next_day.weekday() not in active_weekdays:
-            continue
-        return datetime.combine(next_day, start_time, tzinfo=timezone).astimezone(UTC)
+    earliest = now_utc if last_started_at is None else max(now_utc, last_started_at + cadence_delta)
+    start_time, end_time = _utc_window_times(config)
+    del start_time, end_time
+    candidate = earliest.replace(second=0, microsecond=0)
+    for _step in range(0, 14 * 24 * 60, 15):
+        local_candidate = candidate.astimezone(timezone)
+        if _is_market_active(candidate, local_candidate, config, active_weekdays):
+            return candidate.astimezone(UTC)
+        candidate = candidate + timedelta(minutes=15)
     return None
 
 
 def _utc_window_label(config: dict, timezone_name: str) -> str:
-    timezone = ZoneInfo(timezone_name)
-    start_time = _parse_hhmm(config.get("window_start", "00:00"))
-    end_time = _parse_hhmm(config.get("window_end", "23:59"))
-    reference_dates = [datetime(2026, 1, 15), datetime(2026, 7, 15)] if timezone_name == "America/New_York" else [datetime(2026, 1, 15)]
-
-    start_candidates: list[int] = []
-    end_candidates: list[int] = []
-    for reference in reference_dates:
-        start_utc = datetime.combine(reference.date(), start_time, tzinfo=timezone).astimezone(UTC)
-        end_utc = datetime.combine(reference.date(), end_time, tzinfo=timezone).astimezone(UTC)
-        start_candidates.append(start_utc.hour * 60 + start_utc.minute)
-        end_candidates.append(end_utc.hour * 60 + end_utc.minute)
-
-    start_minutes = min(start_candidates)
-    end_minutes = max(end_candidates)
-    return f"{_minutes_to_hhmm(start_minutes)}-{_minutes_to_hhmm(end_minutes)} UTC"
+    start_time, end_time = _utc_window_times(config)
+    return f"{start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')} UTC"
 
 
 def _minutes_to_hhmm(total_minutes: int) -> str:
@@ -501,3 +499,37 @@ def _minutes_to_hhmm(total_minutes: int) -> str:
     hour = normalized // 60
     minute = normalized % 60
     return f"{hour:02d}:{minute:02d}"
+
+
+def list_enabled_market_codes(session: Session) -> list[str]:
+    runtime = get_runtime_settings(session)
+    return [code for code, config in runtime.get("markets", {}).items() if config.get("enabled", True)]
+
+
+def run_manual_news_refreshes(session: Session, market_code: str | None = None) -> list[str]:
+    from app.services.shared_news import refresh_shared_news_for_market
+
+    market_codes = [market_code] if market_code else list_enabled_market_codes(session)
+    messages: list[str] = []
+    for code in market_codes:
+        try:
+            messages.append(refresh_shared_news_for_market(session, code))
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            messages.append(f"Shared news refresh failed for {code}: {exc}")
+    return messages
+
+
+def run_manual_trade_cycles(session: Session, market_code: str | None = None) -> list[str]:
+    from app.services.runtime_scheduler import RuntimeSchedulerService
+
+    market_codes = [market_code] if market_code else list_enabled_market_codes(session)
+    service = RuntimeSchedulerService()
+    messages: list[str] = []
+    for code in market_codes:
+        try:
+            messages.append(service.run_market_cycle(code))
+        except Exception as exc:
+            messages.append(f"Trade cycle failed for {code}: {exc}")
+    return messages

@@ -31,6 +31,7 @@ from app.api.schemas import (
     ModelSelectionUpdate,
     ModelRuntimeUpdate,
     ModelRanking,
+    AdminActionResponse,
     ModelSummary,
     NewsBatchSummary,
     OverviewResponse,
@@ -38,6 +39,8 @@ from app.api.schemas import (
     PositionSummary,
     RunRequestSummary,
     ResetResponse,
+    RuntimeSecretsResponse,
+    RuntimeSecretsUpdate,
     RuntimeSettingsResponse,
     RuntimeSettingsUpdate,
     SchedulerStatusResponse,
@@ -50,10 +53,13 @@ from app.services.admin import (
     create_or_update_model_profile,
     delete_model_profile,
     reset_simulation,
+    run_manual_news_refreshes,
+    run_manual_trade_cycles,
     set_model_selection,
     update_model_runtime,
     update_runtime_settings,
 )
+from app.services.runtime_secrets import get_runtime_secrets, update_runtime_secrets
 
 runtime_config = load_runtime_config()
 settings = load_settings()
@@ -270,6 +276,45 @@ def update_settings(
     updated = update_runtime_settings(session=session, payload=payload.model_dump(exclude_none=True))
     session.commit()
     return RuntimeSettingsResponse(**updated)
+
+
+@app.get("/admin/secrets", response_model=RuntimeSecretsResponse)
+def admin_secrets(
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> RuntimeSecretsResponse:
+    return RuntimeSecretsResponse(**get_runtime_secrets(session))
+
+
+@app.put("/admin/secrets", response_model=RuntimeSecretsResponse)
+def update_secrets(
+    payload: RuntimeSecretsUpdate,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> RuntimeSecretsResponse:
+    updated = update_runtime_secrets(session=session, payload=payload.model_dump())
+    session.commit()
+    return RuntimeSecretsResponse(**updated)
+
+
+@app.post("/admin/news/refresh", response_model=AdminActionResponse)
+def admin_refresh_news(
+    market_code: str | None = Query(default=None),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> AdminActionResponse:
+    messages = run_manual_news_refreshes(session=session, market_code=market_code.upper() if market_code else None)
+    return AdminActionResponse(messages=messages)
+
+
+@app.post("/admin/trades/run", response_model=AdminActionResponse)
+def admin_run_trades(
+    market_code: str | None = Query(default=None),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> AdminActionResponse:
+    messages = run_manual_trade_cycles(session=session, market_code=market_code.upper() if market_code else None)
+    return AdminActionResponse(messages=messages)
 
 
 @app.post("/admin/reset", response_model=ResetResponse)

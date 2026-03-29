@@ -8,6 +8,7 @@ from app.llm.openrouter import OpenRouterClient
 from app.llm.schemas import TradingDecision
 from app.market_data.models import Candidate, MarketSnapshot
 from app.services.setup_helpers import ensure_model_market_state
+from app.services.shared_news import recent_news_context
 from app.trading.engine import TradingEngine
 
 
@@ -56,6 +57,7 @@ class TradingCycleService:
         portfolio_payload = _portfolio_payload(session, model_id, market_code)
         position_payload = _position_payload(session, model_id, market_code)
         candidate_payload = _candidate_payload(candidates)
+        news_payload = recent_news_context(session, market_code, minutes=60, limit=10)
         prompt_text = build_decision_prompt(
             market_code=market_code,
             custom_prompt=prompt.prompt_content,
@@ -63,6 +65,7 @@ class TradingCycleService:
             positions=position_payload,
             candidates=candidates,
             snapshot=snapshot,
+            news_items=news_headlines,
         )
         model_record = session.scalar(select(LLMModel).where(LLMModel.model_id == model_id))
         request_model_id = _resolve_request_model_id(session, model_id)
@@ -72,6 +75,7 @@ class TradingCycleService:
             "portfolio": portfolio_payload,
             "positions": position_payload,
             "candidates": candidate_payload,
+            "shared_news": news_payload,
         }
         try:
             decision = self.client.request_trading_decision(model_id=request_model_id, decision_prompt=prompt_text)
@@ -196,6 +200,7 @@ def build_decision_prompt(
     positions: list[dict],
     candidates: list[Candidate],
     snapshot: MarketSnapshot,
+    news_items: str,
 ) -> str:
     candidate_payload = _candidate_payload(candidates)
     return f"""
@@ -218,6 +223,9 @@ Screened candidates:
 
 Snapshot timestamp:
 {snapshot.as_of.isoformat()}
+
+News headlines collected during the last 60 minutes:
+{news_items}
 
 Return JSON with this schema exactly:
 {{
@@ -252,6 +260,7 @@ Rules:
 - for SELL, quantity is required
 - do not recommend fractional shares
 - do not mention markdown fences
+- treat the news headlines as shared benchmark context; do not assume access to any hidden or private news tool
 """.strip()
 
 
@@ -339,3 +348,14 @@ def _quantity_from_cash_amount(cash_amount: float | None, current_price: float) 
     if not cash_amount or current_price <= 0:
         return 0
     return int(cash_amount // current_price)
+
+
+
+
+def _news_headline_payload(news_items: list[dict]) -> str:
+    headlines: list[str] = []
+    for item in news_items:
+        title = str(item.get("title") or "").strip()
+        if title:
+            headlines.append(f"- {title}")
+    return "\n".join(headlines) if headlines else "- No shared news headlines available in the last 60 minutes."

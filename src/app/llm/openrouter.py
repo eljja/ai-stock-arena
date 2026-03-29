@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from app.config.loader import load_settings
+from app.services.runtime_secrets import get_runtime_secret
 from app.llm.schemas import ChatCompletionResult, PromptGenerationResult, TradingDecision
 
 BASE_URL = "https://openrouter.ai/api/v1"
@@ -66,8 +66,7 @@ class OpenRouterModel:
 
 class OpenRouterClient:
     def __init__(self, api_key: str | None = None, timeout_seconds: float = 30.0) -> None:
-        settings = load_settings()
-        self.api_key = api_key or settings.openrouter_api_key
+        self.api_key = api_key or get_runtime_secret("openrouter_api_key")
         self.timeout_seconds = timeout_seconds
 
     def list_models(self) -> list[OpenRouterModel]:

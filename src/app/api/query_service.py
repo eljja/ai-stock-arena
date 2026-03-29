@@ -42,6 +42,7 @@ from app.db.models import (
 )
 from app.services.admin import get_runtime_settings, get_scheduler_status, is_model_api_enabled
 from app.services.market_history import tracked_tickers_for_market
+from app.services.shared_news import get_shared_news_status
 
 
 def get_overview(
@@ -543,6 +544,9 @@ def get_runtime_settings_response(session: Session) -> RuntimeSettingsResponse:
 
 def get_scheduler_status_response(session: Session) -> SchedulerStatusResponse:
     status = get_scheduler_status(session)
+    news_status = get_shared_news_status(session)
+    for market in status.get("markets", []):
+        market.update(news_status.get(market.get("market_code"), {}))
     return SchedulerStatusResponse(**status)
 
 

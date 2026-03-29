@@ -37,9 +37,12 @@ from app.services.admin import (
     create_or_update_model_profile,
     delete_model_profile,
     reset_simulation,
+    run_manual_news_refreshes,
+    run_manual_trade_cycles,
     update_model_runtime,
     update_runtime_settings,
 )
+from app.services.runtime_secrets import get_runtime_secrets, update_runtime_secrets
 
 settings = load_settings()
 WEEKDAY_OPTIONS = [
@@ -213,6 +216,44 @@ def _is_admin(token: str) -> bool:
     return bool(settings.admin_token and token and token == settings.admin_token)
 
 
+def _mask_secret(value: str | None) -> str:
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "*" * len(value)
+    return f"{value[:4]}{'*' * max(len(value) - 8, 4)}{value[-4:]}"
+
+
+def load_admin_secrets(api_base_url: str | None, admin_token: str) -> dict[str, str | None]:
+    if api_base_url:
+        with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+            return client.get("/admin/secrets", headers={"X-Admin-Token": admin_token}).json()
+    with SessionLocal() as session:
+        return get_runtime_secrets(session)
+
+
+def _utc_string(value: object) -> str:
+    if value in (None, "", float("nan")):
+        return ""
+    try:
+        parsed = pd.to_datetime(value, utc=True, format="ISO8601", errors="coerce")
+    except TypeError:
+        parsed = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(parsed):
+        return ""
+    return parsed.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _utc_frame(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    if df.empty:
+        return df
+    clone = df.copy()
+    for column in columns:
+        if column in clone.columns:
+            clone[column] = clone[column].apply(_utc_string)
+    return clone
+
+
 def inject_styles() -> None:
     st.markdown(
         """
@@ -323,16 +364,16 @@ def inject_styles() -> None:
             overflow-y: auto;
             display: grid;
             grid-template-columns: minmax(0, 1fr);
-            gap: 8px;
+            gap: 2px;
             padding-right: 4px;
         }
         .asa-news-row {
             display: grid;
-            grid-template-columns: 110px minmax(0, 1fr);
-            gap: 12px;
+            grid-template-columns: 96px minmax(0, 1fr);
+            gap: 8px;
             align-items: start;
-            padding: 8px 0;
-            border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+            padding: 2px 0;
+            border-bottom: none;
         }
         .asa-news-row:last-child {
             border-bottom: none;
@@ -345,8 +386,8 @@ def inject_styles() -> None:
         }
         .asa-news-line {
             color: #dbeafe;
-            font-size: 0.84rem;
-            line-height: 1.35;
+            font-size: 0.82rem;
+            line-height: 1.18;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -445,6 +486,7 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
         leader_name = html.escape(str(leader.get("display_name") or leader.get("model_id")))
         leader_return = _pct(leader.get("current_return_pct"))
     news_mode = "OFF" if not settings_payload.get("news_enabled", False) else str(settings_payload.get("news_mode", "shared_on")).upper()
+    news_policy = str(settings_payload.get("news_collection_policy", "development_fallback")).replace("_", " ").title()
     news_rows = _news_preview_rows(news_batches, limit=20)
     st.markdown(
         f"""
@@ -467,7 +509,7 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
                             <div class="asa-stat-label">Shared News Preview</div>
                             <div class="asa-news-title">Latest normalized headlines for the benchmark feed</div>
                         </div>
-                        <div class="asa-news-subtitle">Mode: {html.escape(news_mode)}</div>
+                        <div class="asa-news-subtitle">Mode: {html.escape(news_mode)} | Policy: {html.escape(news_policy)}</div>
                     </div>
                     <div class="asa-news-list">{news_rows}</div>
                 </div>
@@ -534,13 +576,29 @@ def _legend_highlight_selection(field_name: str) -> alt.SelectionParameter:
     return alt.selection_point(fields=[field_name], bind="legend")
 
 
-def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models: list[str]) -> alt.Chart:
+def _padded_domain(values: pd.Series, pad_ratio: float = 0.05) -> list[float] | None:
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    if numeric.empty:
+        return None
+    lower = float(numeric.min())
+    upper = float(numeric.max())
+    if lower == upper:
+        baseline = abs(lower) if lower != 0 else 1.0
+        padding = baseline * pad_ratio
+        return [lower - padding, upper + padding]
+    span = upper - lower
+    padding = span * pad_ratio
+    return [lower - padding, upper + padding]
+
+
+def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models: list[str], *, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart:
     model_count = max(len(chart_df["model_id"].dropna().unique()), 1)
     color_scale = _model_color_scale(selected_models or chart_df["model_id"].dropna().tolist())
-    selection = _legend_highlight_selection("model_id")
+    selection = legend_selection or _legend_highlight_selection("model_id")
+    y_domain = _padded_domain(chart_df[metric_name])
     base = alt.Chart(chart_df).encode(
         x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
-        y=alt.Y(f"{metric_name}:Q", title=metric_name.replace("_", " ").title()),
+        y=alt.Y(f"{metric_name}:Q", title=metric_name.replace("_", " ").title(), scale=alt.Scale(domain=y_domain, zero=False)),
         color=alt.Color(
             "model_id:N",
             legend=alt.Legend(orient="bottom", columns=min(4, model_count), labelLimit=240, symbolLimit=model_count),
@@ -555,12 +613,15 @@ def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models:
     )
     if chart_df["market_code"].nunique() > 1:
         base = base.encode(strokeDash=alt.StrokeDash("market_code:N", legend=None))
-    line = base.mark_line(strokeWidth=2.4).encode(opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15))).add_params(selection)
+    line = base.mark_line(strokeWidth=2.4).encode(opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)))
     points = base.mark_point(size=56, filled=True).encode(opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)))
-    return (line + points).properties(height=520).interactive()
+    chart = (line + points).properties(height=260)
+    if x_zoom is not None:
+        chart = chart.add_params(x_zoom)
+    return chart
 
 
-def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models: list[str]) -> alt.Chart | None:
+def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
     filtered_trades = trades_df.copy()
     if market_filter != "All":
         filtered_trades = filtered_trades[filtered_trades["market_code"] == market_filter]
@@ -576,15 +637,15 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
     grouped["metric"] = grouped["side"].map({"BUY": "Buy", "SELL": "Sell"}).fillna(grouped["side"])
     grouped = grouped.rename(columns={"bucket": "created_at", "gross_amount": "value"})
     color_scale = _model_color_scale(selected_models or grouped["model_id"].dropna().tolist())
-
-    selection = _legend_highlight_selection("model_id")
-    return (
+    selection = legend_selection or _legend_highlight_selection("model_id")
+    y_domain = _padded_domain(grouped["value"])
+    chart = (
         alt.Chart(grouped)
         .mark_line(point=True, strokeWidth=2.2)
         .encode(
             x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
-            y=alt.Y("value:Q", title="Buy / sell notional"),
-            color=alt.Color("model_id:N", scale=color_scale, legend=alt.Legend(orient="bottom", columns=min(4, max(len(grouped["model_id"].dropna().unique()), 1)), labelLimit=240)),
+            y=alt.Y("value:Q", title="Buy / sell notional", scale=alt.Scale(domain=y_domain, zero=False)),
+            color=alt.Color("model_id:N", scale=color_scale, legend=None),
             strokeDash=alt.StrokeDash("metric:N", legend=None, sort=["Buy", "Sell"]),
             opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)),
             tooltip=[
@@ -594,12 +655,14 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
                 alt.Tooltip("value:Q", title="Value", format=".4f"),
             ],
         )
-        .add_params(selection)
-        .properties(height=300)
+        .properties(height=150)
     )
+    if x_zoom is not None:
+        chart = chart.add_params(x_zoom)
+    return chart
 
 
-def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter: str, selected_models: list[str]) -> alt.Chart | None:
+def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
     frames: list[pd.DataFrame] = []
     filtered_trades = trades_df.copy()
     filtered_logs = logs_df.copy() if not logs_df.empty else pd.DataFrame()
@@ -634,14 +697,15 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
         return None
     cost_df = pd.concat(frames, ignore_index=True)
     color_scale = _model_color_scale(selected_models or cost_df["model_id"].dropna().tolist())
-    selection = _legend_highlight_selection("model_id")
-    return (
+    selection = legend_selection or _legend_highlight_selection("model_id")
+    y_domain = _padded_domain(cost_df["value"])
+    chart = (
         alt.Chart(cost_df)
         .mark_line(point=True, strokeWidth=2.2)
         .encode(
             x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
-            y=alt.Y("value:Q", title="Overhead"),
-            color=alt.Color("model_id:N", scale=color_scale, legend=alt.Legend(orient="bottom", columns=min(4, max(len(cost_df["model_id"].dropna().unique()), 1)), labelLimit=240)),
+            y=alt.Y("value:Q", title="Overhead", scale=alt.Scale(domain=y_domain, zero=False)),
+            color=alt.Color("model_id:N", scale=color_scale, legend=None),
             strokeDash=alt.StrokeDash("metric:N", legend=None, sort=["Trade overhead", "LLM overhead"]),
             opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)),
             tooltip=[
@@ -651,9 +715,11 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
                 alt.Tooltip("value:Q", title="Value", format=".4f"),
             ],
         )
-        .add_params(selection)
-        .properties(height=300)
+        .properties(height=150)
     )
+    if x_zoom is not None:
+        chart = chart.add_params(x_zoom)
+    return chart
 
 
 def market_pulse_chart(history_df: pd.DataFrame) -> alt.Chart:
@@ -731,6 +797,8 @@ settings_payload = payload["settings"] or {
     },
     "news_enabled": False,
     "news_mode": "shared_off",
+    "news_collection_policy": "development_fallback",
+    "news_refresh_interval_minutes": 15,
 }
 scheduler_payload = payload.get("scheduler") or {"markets": []}
 market_windows = settings_payload.get("markets", {})
@@ -855,15 +923,20 @@ with performance_tab:
             st.caption("No performance rows match the current filters.")
         else:
             chart_df["created_at"] = pd.to_datetime(chart_df["created_at"])
-            st.altair_chart(performance_chart(chart_df, metric_name, performance_models), use_container_width=True)
-            buy_sell = buy_sell_chart(trades_df, performance_market, performance_models)
+            x_zoom = alt.selection_interval(encodings=["x"], bind="scales")
+            legend_selection = alt.selection_point(fields=["model_id"], bind="legend")
+            charts = [performance_chart(chart_df, metric_name, performance_models, x_zoom=x_zoom, legend_selection=legend_selection)]
+            buy_sell = buy_sell_chart(trades_df, performance_market, performance_models, x_zoom=x_zoom, legend_selection=legend_selection)
             if buy_sell is not None:
-                st.markdown("**Buy / Sell**")
-                st.altair_chart(buy_sell, use_container_width=True)
-            overhead = overhead_chart(trades_df, logs_all_df, performance_market, performance_models)
+                st.markdown("**Buy / Sell:** Solid line = Buy, dashed line = Sell.")
+                charts.append(buy_sell)
+            overhead = overhead_chart(trades_df, logs_all_df, performance_market, performance_models, x_zoom=x_zoom, legend_selection=legend_selection)
             if overhead is not None:
-                st.markdown("**Overhead**")
-                st.altair_chart(overhead, use_container_width=True)
+                st.markdown("**Overhead:** Solid line = Trade overhead, dashed line = LLM overhead.")
+                charts.append(overhead)
+            performance_bundle = alt.vconcat(*charts, spacing=18).add_params(legend_selection, x_zoom)
+            chart_col, _ = st.columns([5, 1])
+            chart_col.altair_chart(performance_bundle, use_container_width=True)
 
 with market_tab:
     st.markdown('<div class="asa-section-label">Market Pulse</div>', unsafe_allow_html=True)
@@ -930,6 +1003,8 @@ with news_tab:
     st.markdown('<div class="asa-section-label">Shared News</div>', unsafe_allow_html=True)
     if not settings_payload.get("news_enabled", False):
         st.markdown('<div class="asa-warning">Shared news is disabled. This league is running as a pure model benchmark with no external news context.</div>', unsafe_allow_html=True)
+    else:
+        st.caption(f"Collection policy: {settings_payload.get('news_collection_policy', 'development_fallback')}")
     if not news_batches:
         st.caption("No shared news batches stored yet.")
     for batch in news_batches:
@@ -1042,14 +1117,8 @@ with detail_tab:
 
 with admin_tab:
     st.markdown('<div class="asa-section-label">Admin Controls</div>', unsafe_allow_html=True)
+    st.caption("All timestamps and windows in this tab are shown in UTC.")
     st.text_input("Admin token", type="password", key="dashboard_admin_token", help="Press Enter to apply.")
-    st.text_input("FastAPI base URL", key="dashboard_api_base_url", placeholder="http://127.0.0.1:8000")
-    st.checkbox("Selected models only", key="dashboard_selected_only")
-    st.toggle("Auto refresh every 5 minutes", key="dashboard_auto_refresh")
-    st.multiselect("Visible models", model_options, key="dashboard_models")
-    if st.button("Refresh data"):
-        refresh_all()
-        st.rerun()
     current_admin_token = str(st.session_state.get("dashboard_admin_token", ""))
     admin_mode = _is_admin(current_admin_token)
     if not settings.admin_token:
@@ -1057,14 +1126,61 @@ with admin_tab:
     elif not admin_mode:
         st.info("Enter the correct admin token above and press Enter to unlock admin actions.")
     else:
+        st.text_input("FastAPI base URL", key="dashboard_api_base_url", placeholder="http://127.0.0.1:8000")
+        st.checkbox("Selected models only", key="dashboard_selected_only")
+        st.toggle("Auto refresh every 5 minutes", key="dashboard_auto_refresh")
         st.success("Admin mode enabled")
+        for message in st.session_state.pop("admin_action_messages", []):
+            st.info(message)
+
+        st.markdown("**News and runtime controls**")
+        scheduler_admin_df = _utc_frame(
+            scheduler_df,
+            ["last_started_at", "last_completed_at", "next_run_at", "news_last_started_at", "news_last_completed_at"],
+        )
+        runtime_cols = st.columns([1.2, 1.2, 1.6])
+        runtime_cols[0].metric("Trade cadence", f"{int(settings_payload.get('decision_interval_minutes', 60))} min")
+        runtime_cols[1].metric("News refresh cadence", f"{int(settings_payload.get('news_refresh_interval_minutes', 15))} min")
+        runtime_cols[2].metric("News policy", str(settings_payload.get("news_collection_policy", "development_fallback")))
+
+        if not scheduler_admin_df.empty:
+            news_status_df = scheduler_admin_df[[
+                "market_code",
+                "window_label_utc",
+                "in_active_window",
+                "news_in_active_window",
+                "news_is_due",
+                "news_last_status",
+                "news_last_completed_at",
+                "news_last_message",
+            ]].rename(
+                columns={
+                    "market_code": "Market",
+                    "window_label_utc": "Runtime window (UTC)",
+                    "in_active_window": "Trade window active",
+                    "news_in_active_window": "News window active",
+                    "news_is_due": "News due now",
+                    "news_last_status": "Last news status",
+                    "news_last_completed_at": "Last news refresh (UTC)",
+                    "news_last_message": "Last news message",
+                }
+            )
+            st.dataframe(news_status_df, use_container_width=True, hide_index=True)
+
         with st.form("runtime_settings_form"):
             cadence = st.slider(
                 "Decision interval (minutes)",
-                min_value=15,
+                min_value=1,
                 max_value=180,
-                step=15,
+                step=1,
                 value=int(settings_payload.get("decision_interval_minutes", 60)),
+            )
+            news_refresh_interval = st.slider(
+                "News refresh interval (minutes)",
+                min_value=1,
+                max_value=120,
+                step=1,
+                value=int(settings_payload.get("news_refresh_interval_minutes", 15)),
             )
             weekday_defaults = settings_payload.get("active_weekdays", [0, 1, 2, 3, 4])
             active_weekdays = st.multiselect(
@@ -1073,19 +1189,42 @@ with admin_tab:
                 default=weekday_defaults,
                 format_func=lambda value: dict(WEEKDAY_OPTIONS)[value],
             )
-            kr_start = st.text_input("KR window start (market local)", value=market_windows.get("KR", {}).get("window_start", "08:00"))
-            kr_end = st.text_input("KR window end (market local)", value=market_windows.get("KR", {}).get("window_end", "16:00"))
-            us_start = st.text_input("US window start (market local)", value=market_windows.get("US", {}).get("window_start", "08:00"))
-            us_end = st.text_input("US window end (market local)", value=market_windows.get("US", {}).get("window_end", "17:00"))
             news_enabled = st.checkbox("Enable shared news", value=bool(settings_payload.get("news_enabled", False)))
+            news_collection_policy = st.selectbox(
+                "News collection policy",
+                ["development_fallback", "live_strict"],
+                index=0 if str(settings_payload.get("news_collection_policy", "development_fallback")) == "development_fallback" else 1,
+                help="development_fallback keeps wider local testing fallback windows. live_strict uses only the current 15-minute window inside the active runtime window.",
+            )
+            st.markdown("**Runtime windows (UTC)**")
+            kr_window = market_windows.get("KR", {})
+            us_window = market_windows.get("US", {})
+            kr_start_utc = st.text_input("KR window start (UTC)", value=kr_window.get("window_start_utc", "23:00"))
+            kr_end_utc = st.text_input("KR window end (UTC)", value=kr_window.get("window_end_utc", "07:00"))
+            us_start_utc = st.text_input("US window start (UTC)", value=us_window.get("window_start_utc", "12:00"))
+            us_end_utc = st.text_input("US window end (UTC)", value=us_window.get("window_end_utc", "22:00"))
             if st.form_submit_button("Save runtime settings"):
                 payload = {
                     "decision_interval_minutes": cadence,
                     "active_weekdays": sorted(active_weekdays),
                     "news_enabled": news_enabled,
+                    "news_collection_policy": news_collection_policy,
+                    "news_refresh_interval_minutes": news_refresh_interval,
                     "markets": {
-                        "KR": {"enabled": True, "window_start": kr_start, "window_end": kr_end},
-                        "US": {"enabled": True, "window_start": us_start, "window_end": us_end},
+                        "KR": {
+                            "enabled": True,
+                            "window_start": kr_window.get("window_start", "08:00"),
+                            "window_end": kr_window.get("window_end", "16:00"),
+                            "window_start_utc": kr_start_utc,
+                            "window_end_utc": kr_end_utc,
+                        },
+                        "US": {
+                            "enabled": True,
+                            "window_start": us_window.get("window_start", "08:00"),
+                            "window_end": us_window.get("window_end", "17:00"),
+                            "window_start_utc": us_start_utc,
+                            "window_end_utc": us_end_utc,
+                        },
                     },
                 }
                 if api_base_url:
@@ -1097,6 +1236,82 @@ with admin_tab:
                         session.commit()
                 refresh_all()
                 st.rerun()
+
+        st.markdown("**Manual actions**")
+        action_cols = st.columns(2)
+        if action_cols[0].button("Refresh shared news now"):
+            if api_base_url:
+                with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=120.0) as client:
+                    result = client.post("/admin/news/refresh", headers={"X-Admin-Token": current_admin_token}).json()
+            else:
+                with SessionLocal() as session:
+                    result = {"messages": run_manual_news_refreshes(session)}
+            st.session_state["admin_action_messages"] = result.get("messages", [])
+            refresh_all()
+            st.rerun()
+        if action_cols[1].button("Run full trade cycle now"):
+            if api_base_url:
+                with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=600.0) as client:
+                    result = client.post("/admin/trades/run", headers={"X-Admin-Token": current_admin_token}).json()
+            else:
+                with SessionLocal() as session:
+                    result = {"messages": run_manual_trade_cycles(session)}
+            st.session_state["admin_action_messages"] = result.get("messages", [])
+            refresh_all()
+            st.rerun()
+
+        st.markdown("**Runtime secrets**")
+        show_secrets = st.toggle("Show secrets", key="dashboard_show_admin_secrets")
+        admin_secrets = load_admin_secrets(api_base_url or None, current_admin_token)
+        with st.form("runtime_secrets_form"):
+            openrouter_value = st.text_input(
+                "OpenRouter API token",
+                value=admin_secrets.get("openrouter_api_key") or "",
+                type="default" if show_secrets else "password",
+            )
+            marketaux_value = st.text_input(
+                "Marketaux API token",
+                value=admin_secrets.get("marketaux_api_token") or "",
+                type="default" if show_secrets else "password",
+            )
+            st.caption(f"Masked preview: OpenRouter={_mask_secret(admin_secrets.get('openrouter_api_key'))} | Marketaux={_mask_secret(admin_secrets.get('marketaux_api_token'))}")
+            if st.form_submit_button("Save secrets"):
+                payload = {
+                    "openrouter_api_key": openrouter_value,
+                    "marketaux_api_token": marketaux_value,
+                }
+                if api_base_url:
+                    with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+                        client.put("/admin/secrets", headers={"X-Admin-Token": current_admin_token}, json=payload).raise_for_status()
+                else:
+                    with SessionLocal() as session:
+                        update_runtime_secrets(session, payload)
+                        session.commit()
+                refresh_all()
+                st.rerun()
+
+        st.markdown("**Visible models**")
+        visible_models_df = models_df[["model_id", "display_name"]].copy() if not models_df.empty else pd.DataFrame(columns=["model_id", "display_name"])
+        visible_models_df.insert(0, "visible", visible_models_df["model_id"].isin(st.session_state.get("dashboard_models", [])))
+        edited_visible_models = st.data_editor(
+            visible_models_df.rename(columns={"visible": "Visible", "model_id": "Profile ID", "display_name": "Display name"}),
+            use_container_width=True,
+            hide_index=True,
+            height=840,
+            disabled=["Profile ID", "Display name"],
+            key="dashboard_visible_models_editor",
+            column_config={"Visible": st.column_config.CheckboxColumn("Visible")},
+        )
+        visible_selection = edited_visible_models.loc[edited_visible_models["Visible"], "Profile ID"].tolist() if not edited_visible_models.empty else []
+        utility_cols = st.columns([1, 1.2, 2.2])
+        if utility_cols[0].button("Apply visible models"):
+            st.session_state["dashboard_models"] = visible_selection or model_options
+            refresh_all()
+            st.rerun()
+        if utility_cols[1].button("Refresh data"):
+            refresh_all()
+            st.rerun()
+        utility_cols[2].caption("Visible models now show about three times more rows than before. Changes apply after you press Apply visible models.")
 
         st.markdown("**Investment profiles**")
         profile_columns = [
@@ -1226,9 +1441,10 @@ with admin_tab:
                 st.rerun()
 
         if not runs_df.empty:
-            st.markdown("**Recent run queue**")
+            st.markdown("**Recent run queue (UTC)**")
+            runs_admin_df = _utc_frame(runs_df, ["requested_at", "started_at", "completed_at", "snapshot_as_of"])
             st.dataframe(
-                runs_df[[
+                runs_admin_df[[
                     "requested_at",
                     "model_id",
                     "market_code",
@@ -1239,7 +1455,7 @@ with admin_tab:
                     "error_message",
                 ]].rename(
                     columns={
-                        "requested_at": "Requested at",
+                        "requested_at": "Requested at (UTC)",
                         "model_id": "Model",
                         "market_code": "Market",
                         "status": "Status",
@@ -1253,26 +1469,31 @@ with admin_tab:
                 hide_index=True,
             )
 
-        if not scheduler_df.empty:
-            st.markdown("**Scheduler status**")
+        if not scheduler_admin_df.empty:
+            st.markdown("**Scheduler status (UTC)**")
             st.dataframe(
-                scheduler_df[["market_code", "market_timezone", "window_label_utc", "in_active_window", "is_due", "last_status", "last_completed_at", "next_run_at"]].rename(
+                scheduler_admin_df[["market_code", "market_timezone", "window_label_utc", "in_active_window", "is_due", "last_status", "last_completed_at", "next_run_at", "news_in_active_window", "news_is_due", "news_last_status", "news_last_completed_at", "news_last_message"]].rename(
                     columns={
                         "market_code": "Market",
                         "market_timezone": "Timezone",
                         "window_label_utc": "Window (UTC)",
-                        "in_active_window": "In window",
-                        "is_due": "Due now",
-                        "last_status": "Last status",
-                        "last_completed_at": "Last completed",
-                        "next_run_at": "Next run",
+                        "in_active_window": "Trade window",
+                        "is_due": "Trade due now",
+                        "last_status": "Trade last status",
+                        "last_completed_at": "Trade last completed (UTC)",
+                        "next_run_at": "Next trade run (UTC)",
+                        "news_in_active_window": "News window",
+                        "news_is_due": "News due now",
+                        "news_last_status": "News last status",
+                        "news_last_completed_at": "News last completed (UTC)",
+                        "news_last_message": "News last message",
                     }
                 ),
                 use_container_width=True,
                 hide_index=True,
             )
 
-        st.caption("Destructive model deletion is no longer available in the dashboard. Use the admin API only if you need a permanent purge.")
+        st.caption("Destructive model deletion remains admin-only. Use API disable to stop token usage without deleting history.")
 
         st.markdown("**Reset simulation**")
         if st.button("Reset all trading data and restart", type="primary"):
@@ -1285,17 +1506,3 @@ with admin_tab:
                     session.commit()
             refresh_all()
             st.rerun()
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -141,6 +141,8 @@ class RuntimeSettingsResponse(BaseModel):
     markets: dict[str, dict]
     news_enabled: bool
     news_mode: str
+    news_collection_policy: str
+    news_refresh_interval_minutes: int
 
 
 class MarketSchedulerStatus(BaseModel):
@@ -150,6 +152,12 @@ class MarketSchedulerStatus(BaseModel):
     enabled: bool
     in_active_window: bool
     is_due: bool
+    news_in_active_window: bool
+    news_is_due: bool
+    news_last_started_at: datetime | None
+    news_last_completed_at: datetime | None
+    news_last_status: str | None
+    news_last_message: str | None
     last_started_at: datetime | None
     last_completed_at: datetime | None
     last_status: str | None
@@ -169,6 +177,8 @@ class RuntimeSettingsUpdate(BaseModel):
     markets: dict[str, dict] | None = None
     news_enabled: bool | None = None
     news_mode: str | None = None
+    news_collection_policy: str | None = None
+    news_refresh_interval_minutes: int | None = None
 
 
 class ResetResponse(BaseModel):
@@ -179,6 +189,20 @@ class ResetResponse(BaseModel):
     deleted_snapshots: int
     deleted_news_items: int
     deleted_news_batches: int
+
+
+class RuntimeSecretsResponse(BaseModel):
+    openrouter_api_key: str | None
+    marketaux_api_token: str | None
+
+
+class RuntimeSecretsUpdate(BaseModel):
+    openrouter_api_key: str | None = None
+    marketaux_api_token: str | None = None
+
+
+class AdminActionResponse(BaseModel):
+    messages: list[str]
 
 
 class ModelProfileUpsertRequest(BaseModel):

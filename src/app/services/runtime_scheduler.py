@@ -14,6 +14,7 @@ from app.services.admin import get_scheduler_status, is_model_api_enabled, updat
 from app.services.bootstrap import create_schema
 from app.services.market_history import record_market_snapshot
 from app.services.run_requests import create_run_request, mark_run_request_finished, mark_run_request_started
+from app.services.shared_news import run_due_news_refreshes
 
 
 class RuntimeSchedulerService:
@@ -30,10 +31,11 @@ class RuntimeSchedulerService:
 
     def run_pending_once(self) -> list[str]:
         create_schema()
+        messages: list[str] = []
         with SessionLocal() as session:
+            messages.extend(run_due_news_refreshes(session))
             status = get_scheduler_status(session)
         due_markets = [item["market_code"] for item in status["markets"] if item["enabled"] and item["is_due"]]
-        messages: list[str] = []
         for market_code in due_markets:
             messages.append(self.run_market_cycle(market_code))
         return messages
@@ -159,5 +161,3 @@ class RuntimeSchedulerService:
             )
             session.commit()
         return message
-
-
