@@ -753,7 +753,7 @@ def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models:
     chart = (line + points).properties(height=260)
     if x_zoom is not None:
         chart = chart.add_params(x_zoom)
-    return _apply_chart_theme(chart)
+    return chart
 
 
 def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
@@ -797,7 +797,7 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
     )
     if x_zoom is not None:
         chart = chart.add_params(x_zoom)
-    return _apply_chart_theme(chart)
+    return chart
 
 
 def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
@@ -859,7 +859,7 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
     )
     if x_zoom is not None:
         chart = chart.add_params(x_zoom)
-    return _apply_chart_theme(chart)
+    return chart
 
 
 def market_pulse_chart(history_df: pd.DataFrame) -> alt.Chart:
