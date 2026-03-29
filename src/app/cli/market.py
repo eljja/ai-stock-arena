@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import typer
 from sqlalchemy import select
@@ -8,6 +8,7 @@ from app.db.session import SessionLocal
 from app.market_data.provider import YahooMarketDataProvider
 from app.market_data.screener import MarketScreener
 from app.services.bootstrap import create_schema
+from app.services.market_history import backfill_tracked_market_history, record_market_snapshot
 from app.services.setup_helpers import ensure_model_market_state
 from app.trading.engine import TradingEngine
 
@@ -20,15 +21,61 @@ def screen(market_code: str, limit: int = 10) -> None:
     provider = YahooMarketDataProvider()
     screener = MarketScreener()
     snapshot = provider.fetch_market_snapshot(market_code.upper())
+    with SessionLocal() as session:
+        inserted = record_market_snapshot(session, snapshot)
+        session.commit()
     candidates = screener.screen(snapshot)[:limit]
 
-    typer.echo(f"AI Stock Arena screen for {snapshot.market_code} at {snapshot.as_of.isoformat()}")
+    typer.echo(f"AI Stock Arena screen for {snapshot.market_code} at {snapshot.as_of.isoformat()} | stored_rows={inserted}")
     for idx, candidate in enumerate(candidates, start=1):
         price = candidate.snapshot
         typer.echo(
             f"{idx}. {candidate.ticker} | {candidate.instrument_name} | score={candidate.score:.2f} | "
             f"price={price.current_price:.2f} | 1h={price.return_1h_pct:.2f}% | 1d={price.return_1d_pct:.2f}%"
         )
+
+
+@cli.command()
+def collect_history(market_code: str) -> None:
+    create_schema()
+    provider = YahooMarketDataProvider()
+    snapshot = provider.fetch_market_snapshot(market_code.upper())
+    with SessionLocal() as session:
+        inserted = record_market_snapshot(session, snapshot)
+        session.commit()
+    typer.echo(
+        f"Stored {inserted} hourly market price rows for {snapshot.market_code} at {snapshot.as_of.isoformat()}"
+    )
+
+
+@cli.command()
+def backfill_tracked_history(
+    market_code: str,
+    top_n: int = 20,
+    period: str = "730d",
+    selected_only: bool = True,
+) -> None:
+    create_schema()
+    provider = YahooMarketDataProvider()
+    with SessionLocal() as session:
+        result = backfill_tracked_market_history(
+            session=session,
+            provider=provider,
+            market_code=market_code.upper(),
+            selected_only=selected_only,
+            top_n=top_n,
+            period=period,
+        )
+        session.commit()
+    typer.echo(
+        f"Backfilled {result['market_code']} | tracked={len(result['tracked_tickers'])} | "
+        f"stored={result['stored_tickers']} | inserted_rows={result['inserted_rows']} | "
+        f"history_points={result['history_points']}"
+    )
+    if result["tracked_tickers"]:
+        typer.echo("Tracked tickers: " + ", ".join(result["tracked_tickers"]))
+    if result["missing_tickers"]:
+        typer.echo("Missing tickers: " + ", ".join(result["missing_tickers"]))
 
 
 @cli.command()

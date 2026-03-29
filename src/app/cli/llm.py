@@ -9,6 +9,7 @@ from app.market_data.provider import YahooMarketDataProvider
 from app.market_data.screener import MarketScreener
 from app.orchestration.trading_cycle import TradingCycleService
 from app.services.bootstrap import create_schema
+from app.services.market_history import record_market_snapshot
 from app.services.run_requests import create_run_request, mark_run_request_finished, mark_run_request_started
 from app.services.setup_helpers import ensure_model_market_state
 
@@ -42,6 +43,9 @@ def run_cycle(market_code: str, model_id: str, candidate_limit: int = 15) -> Non
     service = TradingCycleService()
 
     snapshot = provider.fetch_market_snapshot(market_code)
+    with SessionLocal() as session:
+        record_market_snapshot(session, snapshot)
+        session.commit()
     candidates = screener.screen(snapshot)[:candidate_limit]
     if not candidates:
         raise typer.Exit(code=1)

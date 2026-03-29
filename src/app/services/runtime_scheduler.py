@@ -12,6 +12,7 @@ from app.market_data.screener import MarketScreener
 from app.orchestration.trading_cycle import TradingCycleService
 from app.services.admin import get_scheduler_status, update_market_scheduler_state
 from app.services.bootstrap import create_schema
+from app.services.market_history import record_market_snapshot
 from app.services.run_requests import create_run_request, mark_run_request_finished, mark_run_request_started
 
 
@@ -51,6 +52,9 @@ class RuntimeSchedulerService:
 
         try:
             snapshot = self.provider.fetch_market_snapshot(market_code)
+            with SessionLocal() as session:
+                record_market_snapshot(session, snapshot)
+                session.commit()
             candidates = self.screener.screen(snapshot)
             if not candidates:
                 raise RuntimeError(f"No screened candidates for {market_code}.")

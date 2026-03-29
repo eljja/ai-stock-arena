@@ -10,6 +10,8 @@ from app.api.query_service import (
     get_runtime_settings_response,
     get_scheduler_status_response,
     list_llm_logs,
+    list_market_instruments,
+    list_market_price_history,
     list_models,
     list_news_batches,
     list_portfolios,
@@ -23,6 +25,8 @@ from app.api.schemas import (
     CopyTradeResponse,
     HealthResponse,
     LLMDecisionLogSummary,
+    MarketInstrumentSummary,
+    MarketPriceHistoryPoint,
     ModelProfileUpsertRequest,
     ModelSelectionUpdate,
     ModelRanking,
@@ -172,6 +176,32 @@ def snapshots(
     )
 
 
+@app.get("/market-instruments", response_model=list[MarketInstrumentSummary])
+def market_instruments(
+    market_code: str | None = Query(default=None),
+    active_only: bool = Query(default=False),
+    session: Session = Depends(get_session),
+) -> list[MarketInstrumentSummary]:
+    return list_market_instruments(session=session, market_code=market_code, active_only=active_only)
+
+
+@app.get("/market-price-history", response_model=list[MarketPriceHistoryPoint])
+def market_price_history(
+    market_code: str = Query(...),
+    selected_only: bool = Query(default=True),
+    top_n: int = Query(default=20, ge=1, le=50),
+    limit_per_ticker: int = Query(default=0, ge=0, le=10000),
+    session: Session = Depends(get_session),
+) -> list[MarketPriceHistoryPoint]:
+    return list_market_price_history(
+        session=session,
+        market_code=market_code,
+        selected_only=selected_only,
+        top_n=top_n,
+        limit_per_ticker=limit_per_ticker,
+    )
+
+
 @app.get("/news", response_model=list[NewsBatchSummary])
 def news(
     market_code: str | None = Query(default=None),
@@ -297,4 +327,5 @@ def remove_model_profile(
     result = delete_model_profile(session=session, profile_id=model_id)
     session.commit()
     return result
+
 

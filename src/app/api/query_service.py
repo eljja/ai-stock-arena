@@ -12,6 +12,8 @@ from app.api.schemas import (
     CopyTradeResponse,
     LLMDecisionLogSummary,
     ModelRanking,
+    MarketInstrumentSummary,
+    MarketPriceHistoryPoint,
     RunRequestSummary,
     ModelSummary,
     NewsBatchSummary,
@@ -26,7 +28,9 @@ from app.api.schemas import (
 )
 from app.db.models import (
     LLMDecisionLog,
+    HourlyMarketPrice,
     LLMModel,
+    MarketInstrument,
     MarketSetting,
     PerformanceSnapshot,
     Portfolio,
@@ -37,6 +41,7 @@ from app.db.models import (
     Trade,
 )
 from app.services.admin import get_runtime_settings, get_scheduler_status
+from app.services.market_history import tracked_tickers_for_market
 
 
 def get_overview(
@@ -286,6 +291,94 @@ def list_rankings(
     return rankings
 
 
+def list_market_instruments(
+    session: Session,
+    market_code: str | None = None,
+    active_only: bool = False,
+) -> list[MarketInstrumentSummary]:
+    stmt = select(MarketInstrument).order_by(MarketInstrument.market_code.asc(), MarketInstrument.is_active.desc(), MarketInstrument.ticker.asc())
+    if market_code:
+        stmt = stmt.where(MarketInstrument.market_code == market_code)
+    if active_only:
+        stmt = stmt.where(MarketInstrument.is_active.is_(True))
+    instruments = session.scalars(stmt).all()
+    return [
+        MarketInstrumentSummary(
+            market_code=item.market_code,
+            ticker=item.ticker,
+            instrument_name=item.instrument_name,
+            is_active=item.is_active,
+            first_seen_at=item.first_seen_at,
+            last_seen_at=item.last_seen_at,
+            delisted_at=item.delisted_at,
+        )
+        for item in instruments
+    ]
+
+
+def list_market_price_history(
+    session: Session,
+    market_code: str,
+    selected_only: bool = True,
+    top_n: int = 20,
+    limit_per_ticker: int = 0,
+) -> list[MarketPriceHistoryPoint]:
+    top_tickers = tracked_tickers_for_market(
+        session=session,
+        market_code=market_code,
+        selected_only=selected_only,
+        top_n=top_n,
+    )
+    if not top_tickers:
+        return []
+
+    active_map = {
+        item.ticker: item
+        for item in session.scalars(
+            select(MarketInstrument).where(
+                MarketInstrument.market_code == market_code,
+                MarketInstrument.ticker.in_(top_tickers),
+            )
+        ).all()
+    }
+    rows = session.scalars(
+        select(HourlyMarketPrice)
+        .where(
+            HourlyMarketPrice.market_code == market_code,
+            HourlyMarketPrice.ticker.in_(top_tickers),
+        )
+        .order_by(HourlyMarketPrice.as_of.asc(), HourlyMarketPrice.ticker.asc())
+    ).all()
+    grouped: dict[str, list[HourlyMarketPrice]] = defaultdict(list)
+    for row in rows:
+        grouped[row.ticker].append(row)
+
+    payload: list[MarketPriceHistoryPoint] = []
+    for ticker in top_tickers:
+        instrument = active_map.get(ticker)
+        history = grouped.get(ticker, [])
+        if limit_per_ticker and limit_per_ticker > 0:
+            history = history[-limit_per_ticker:]
+        for row in history:
+            payload.append(
+                MarketPriceHistoryPoint(
+                    market_code=row.market_code,
+                    ticker=row.ticker,
+                    instrument_name=row.instrument_name,
+                    current_price=row.current_price,
+                    return_1h_pct=row.return_1h_pct,
+                    return_1d_pct=row.return_1d_pct,
+                    intraday_volatility_pct=row.intraday_volatility_pct,
+                    latest_volume=row.latest_volume,
+                    avg_hourly_dollar_volume=row.avg_hourly_dollar_volume,
+                    currency=row.currency,
+                    as_of=row.as_of,
+                    is_active=instrument.is_active if instrument else True,
+                )
+            )
+    return payload
+
+
 def list_news_batches(
     session: Session,
     market_code: str | None = None,
@@ -515,6 +608,15 @@ def _serialize_snapshot(snapshot: PerformanceSnapshot) -> SnapshotSummary:
     )
 
 
+def _top_market_history_tickers(session: Session, market_code: str, selected_only: bool, top_n: int) -> list[str]:
+    return tracked_tickers_for_market(
+        session=session,
+        market_code=market_code,
+        selected_only=selected_only,
+        top_n=top_n,
+    )
+
+
 def _pricing_label(model: LLMModel) -> str:
     if model.prompt_price_per_million is None or model.completion_price_per_million is None:
         return "pricing unavailable"
@@ -645,6 +747,9 @@ def _log_float(log: LLMDecisionLog, key: str) -> float | None:
     if value in (None, ""):
         return None
     return float(value)
+
+
+
 
 
 

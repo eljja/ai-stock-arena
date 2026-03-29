@@ -186,6 +186,40 @@ class SharedNewsItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
 
 
+class MarketInstrument(Base):
+    __tablename__ = "market_instruments"
+    __table_args__ = (UniqueConstraint("market_code", "ticker", name="uq_market_instruments_market_ticker"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    market_code: Mapped[str] = mapped_column(String(30), index=True)
+    ticker: Mapped[str] = mapped_column(String(50), index=True)
+    instrument_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    delisted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class HourlyMarketPrice(Base):
+    __tablename__ = "hourly_market_prices"
+    __table_args__ = (UniqueConstraint("market_code", "ticker", "as_of", name="uq_hourly_market_prices_market_ticker_asof"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    market_code: Mapped[str] = mapped_column(String(30), index=True)
+    ticker: Mapped[str] = mapped_column(String(50), index=True)
+    instrument_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    current_price: Mapped[float] = mapped_column(Float)
+    previous_close: Mapped[float] = mapped_column(Float)
+    return_1h_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    return_1d_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    intraday_volatility_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    latest_volume: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_hourly_dollar_volume: Mapped[float] = mapped_column(Float, default=0.0)
+    currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
 class LLMDecisionLog(Base):
     __tablename__ = "llm_decision_logs"
 

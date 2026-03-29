@@ -213,6 +213,31 @@ class NewsBatchSummary(BaseModel):
     items: list[NewsItemSummary]
 
 
+class MarketInstrumentSummary(BaseModel):
+    market_code: str
+    ticker: str
+    instrument_name: str | None
+    is_active: bool
+    first_seen_at: datetime
+    last_seen_at: datetime
+    delisted_at: datetime | None
+
+
+class MarketPriceHistoryPoint(BaseModel):
+    market_code: str
+    ticker: str
+    instrument_name: str | None
+    current_price: float
+    return_1h_pct: float
+    return_1d_pct: float
+    intraday_volatility_pct: float
+    latest_volume: float
+    avg_hourly_dollar_volume: float
+    currency: str | None
+    as_of: datetime
+    is_active: bool
+
+
 class LLMDecisionLogSummary(BaseModel):
     id: int
     model_id: str

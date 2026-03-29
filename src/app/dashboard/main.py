@@ -13,12 +13,15 @@ import altair as alt
 import httpx
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from app.api.query_service import (
     get_overview,
     get_runtime_settings_response,
     get_scheduler_status_response,
     list_llm_logs,
+    list_market_instruments,
+    list_market_price_history,
     list_models,
     list_news_batches,
     list_portfolios,
@@ -112,6 +115,44 @@ def load_model_logs(api_base_url: str | None, model_id: str | None, market_code:
         ]
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def load_market_history(api_base_url: str | None, market_code: str, selected_only: bool, top_n: int = 20, limit_per_ticker: int = 0) -> list[dict]:
+    if api_base_url:
+        with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+            return client.get(
+                "/market-price-history",
+                params={
+                    "market_code": market_code,
+                    "selected_only": str(selected_only).lower(),
+                    "top_n": top_n,
+                    "limit_per_ticker": limit_per_ticker,
+                },
+            ).json()
+    with SessionLocal() as session:
+        return [
+            item.model_dump(mode="json")
+            for item in list_market_price_history(
+                session=session,
+                market_code=market_code,
+                selected_only=selected_only,
+                top_n=top_n,
+                limit_per_ticker=limit_per_ticker,
+            )
+        ]
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_market_instrument_registry(api_base_url: str | None, market_code: str) -> list[dict]:
+    if api_base_url:
+        with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+            return client.get("/market-instruments", params={"market_code": market_code}).json()
+    with SessionLocal() as session:
+        return [
+            item.model_dump(mode="json")
+            for item in list_market_instruments(session=session, market_code=market_code, active_only=False)
+        ]
+
+
 def refresh_all() -> None:
     load_base_data.clear()
     load_model_logs.clear()
@@ -132,6 +173,40 @@ def _pct(value: float | None) -> str:
 def _weekday_labels(values: list[int]) -> str:
     mapping = dict(WEEKDAY_OPTIONS)
     return ", ".join(mapping.get(value, str(value)) for value in values)
+
+
+def _news_preview_rows(news_batches: list[dict], limit: int = 20) -> str:
+    flattened: list[dict[str, str]] = []
+    for batch in news_batches or []:
+        for item in batch.get("items", []):
+            published = str(item.get("published_at") or "")
+            source = str(item.get("source") or "Unknown source")
+            title = str(item.get("title") or "Untitled")
+            summary = str(item.get("summary") or "")
+            tickers = ", ".join(item.get("tickers") or [])
+            detail = " | ".join(part for part in [title, summary, source, tickers] if part)
+            flattened.append(
+                {
+                    "published_at": published,
+                    "time_label": published[2:16].replace("T", " ") if published else "No time",
+                    "line": f"[{source}] {title}",
+                    "detail": detail,
+                }
+            )
+    flattened.sort(key=lambda row: row["published_at"], reverse=True)
+    rows = flattened[:limit]
+    if not rows:
+        placeholder = html.escape("No shared news loaded yet. This area is reserved for the latest 20 normalized headlines.")
+        return f'<div class="asa-news-row"><div class="asa-news-time">pending</div><div class="asa-news-line" title="{placeholder}">{placeholder}</div></div>'
+    html_rows = []
+    for row in rows:
+        line = html.escape(row["line"])
+        detail = html.escape(row["detail"] or row["line"])
+        time_label = html.escape(row["time_label"])
+        html_rows.append(
+            f'<div class="asa-news-row"><div class="asa-news-time">{time_label}</div><div class="asa-news-line" title="{detail}">{line}</div></div>'
+        )
+    return "".join(html_rows)
 
 
 def _is_admin(token: str) -> bool:
@@ -203,17 +278,78 @@ def inject_styles() -> None:
             font-size: 1rem;
             line-height: 1.5;
         }
-        .asa-strip {
+        .asa-hero-grid {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 12px;
+            grid-template-columns: minmax(240px, 0.9fr) minmax(0, 2.1fr);
+            gap: 16px;
             margin-top: 20px;
+            align-items: stretch;
+        }
+        .asa-stat-stack {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            gap: 12px;
         }
         .asa-stat {
             padding: 14px 16px;
             background: rgba(15, 23, 42, 0.7);
             border: 1px solid rgba(148, 163, 184, 0.16);
             border-radius: 18px;
+        }
+        .asa-news-wall {
+            padding: 16px 18px;
+            background: linear-gradient(180deg, rgba(9, 18, 33, 0.88), rgba(13, 27, 45, 0.8));
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            border-radius: 18px;
+            min-height: 228px;
+        }
+        .asa-news-meta {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: baseline;
+            margin-bottom: 10px;
+        }
+        .asa-news-title {
+            font: 700 0.95rem 'Space Grotesk', sans-serif;
+            color: #f8fafc;
+        }
+        .asa-news-subtitle {
+            color: #94a3b8;
+            font-size: 0.82rem;
+        }
+        .asa-news-list {
+            max-height: 182px;
+            overflow-y: auto;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            gap: 8px;
+            padding-right: 4px;
+        }
+        .asa-news-row {
+            display: grid;
+            grid-template-columns: 110px minmax(0, 1fr);
+            gap: 12px;
+            align-items: start;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+        }
+        .asa-news-row:last-child {
+            border-bottom: none;
+        }
+        .asa-news-time {
+            color: #67e8f9;
+            font: 600 0.74rem 'IBM Plex Sans', sans-serif;
+            white-space: nowrap;
+            padding-top: 1px;
+        }
+        .asa-news-line {
+            color: #dbeafe;
+            font-size: 0.84rem;
+            line-height: 1.35;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         .asa-stat-label {
             font: 600 0.76rem 'Space Grotesk', sans-serif;
@@ -225,6 +361,19 @@ def inject_styles() -> None:
             font: 700 1.25rem 'Space Grotesk', sans-serif;
             margin-top: 6px;
             color: #f8fafc;
+        }
+        .asa-stat-value-compact {
+            font-size: 0.98rem;
+            line-height: 1.45;
+        }
+        .asa-stat-value-main {
+            display: block;
+        }
+        .asa-stat-value-sub {
+            display: block;
+            margin-top: 6px;
+            font: 700 0.95rem 'IBM Plex Sans', sans-serif;
+            color: #93c5fd;
         }
         .asa-podium {
             padding: 18px;
@@ -282,13 +431,13 @@ def inject_styles() -> None:
     )
 
 
-def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd.DataFrame) -> None:
+def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd.DataFrame, news_batches: list[dict]) -> None:
     market_windows = settings_payload.get("markets", {})
     utc_windows = {
         item.get("market_code"): item.get("window_label_utc", "n/a")
         for item in scheduler_payload.get("markets", [])
     }
-    windows_line = " | ".join(f"{code}: {utc_windows.get(code, 'n/a')}" for code in market_windows)
+    windows_lines = "<br>".join(f"{code}: {utc_windows.get(code, 'n/a')}" for code in market_windows)
     leader_name = "No active model"
     leader_return = "n/a"
     if not rankings_df.empty:
@@ -296,6 +445,7 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
         leader_name = html.escape(str(leader.get("display_name") or leader.get("model_id")))
         leader_return = _pct(leader.get("current_return_pct"))
     news_mode = "OFF" if not settings_payload.get("news_enabled", False) else str(settings_payload.get("news_mode", "shared_on")).upper()
+    news_rows = _news_preview_rows(news_batches, limit=20)
     st.markdown(
         f"""
         <section class="asa-hero">
@@ -305,11 +455,22 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
                 <div class="asa-signature">eljja1@gmail.com</div>
             </div>
             <div class="asa-subhead">Rank LLMs by fee-adjusted return, drawdown, and execution cost. Same markets, same cadence, same rules.</div>
-            <div class="asa-strip">
-                <div class="asa-stat"><div class="asa-stat-label">Cadence</div><div class="asa-stat-value">Every {settings_payload.get('decision_interval_minutes', 60)} min</div></div>
-                <div class="asa-stat"><div class="asa-stat-label">Windows (UTC)</div><div class="asa-stat-value">{html.escape(windows_line)}</div></div>
-                <div class="asa-stat"><div class="asa-stat-label">Current Leader</div><div class="asa-stat-value">{leader_name} | {leader_return}</div></div>
-                <div class="asa-stat"><div class="asa-stat-label">Shared News</div><div class="asa-stat-value">{html.escape(news_mode)}</div></div>
+            <div class="asa-hero-grid">
+                <div class="asa-stat-stack">
+                    <div class="asa-stat"><div class="asa-stat-label">Cadence</div><div class="asa-stat-value">Every {settings_payload.get('decision_interval_minutes', 60)} min</div></div>
+                    <div class="asa-stat"><div class="asa-stat-label">Windows (UTC)</div><div class="asa-stat-value asa-stat-value-compact">{windows_lines}</div></div>
+                    <div class="asa-stat"><div class="asa-stat-label">Current Leader</div><div class="asa-stat-value"><span class="asa-stat-value-main">{leader_name}</span><span class="asa-stat-value-sub">{leader_return}</span></div></div>
+                </div>
+                <div class="asa-news-wall">
+                    <div class="asa-news-meta">
+                        <div>
+                            <div class="asa-stat-label">Shared News Preview</div>
+                            <div class="asa-news-title">Latest normalized headlines for the benchmark feed</div>
+                        </div>
+                        <div class="asa-news-subtitle">Mode: {html.escape(news_mode)}</div>
+                    </div>
+                    <div class="asa-news-list">{news_rows}</div>
+                </div>
             </div>
         </section>
         """,
@@ -344,7 +505,7 @@ def model_allocation_frame(model_id: str, positions_df: pd.DataFrame, portfolios
     return allocation_df
 
 
-COLOR_RANGE = ["#60a5fa", "#34d399", "#f472b6", "#f59e0b", "#a78bfa", "#f87171", "#22d3ee", "#fb7185"]
+COLOR_RANGE = ["#00c2ff", "#2d7ff9", "#5a4bff", "#845ef7", "#b84cff", "#ff4ecd", "#ff5d8f", "#ff6b6b", "#ff7f50", "#ff9f1c", "#ffbf00", "#e9c46a", "#b8de29", "#7ad151", "#22c55e", "#00c49a", "#00b8d9", "#48cae4", "#4cc9f0", "#70d6ff", "#a78bfa", "#f472b6", "#fb7185", "#f97316"]
 
 
 def allocation_chart(allocation_df: pd.DataFrame) -> alt.Chart:
@@ -363,21 +524,79 @@ def allocation_chart(allocation_df: pd.DataFrame) -> alt.Chart:
     )
 
 
-def performance_chart(chart_df: pd.DataFrame, metric_name: str) -> alt.Chart:
-    series_count = max(len(chart_df["series"].unique()), 1)
+def _model_color_scale(model_ids: list[str]) -> alt.Scale:
+    domain = list(dict.fromkeys(model_ids))
+    palette = COLOR_RANGE[: max(len(domain), 1)]
+    return alt.Scale(domain=domain, range=palette)
+
+
+def _legend_highlight_selection(field_name: str) -> alt.SelectionParameter:
+    return alt.selection_point(fields=[field_name], bind="legend")
+
+
+def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models: list[str]) -> alt.Chart:
+    model_count = max(len(chart_df["model_id"].dropna().unique()), 1)
+    color_scale = _model_color_scale(selected_models or chart_df["model_id"].dropna().tolist())
+    selection = _legend_highlight_selection("model_id")
     base = alt.Chart(chart_df).encode(
         x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
         y=alt.Y(f"{metric_name}:Q", title=metric_name.replace("_", " ").title()),
         color=alt.Color(
-            "series:N",
-            legend=alt.Legend(orient="bottom", columns=min(4, series_count), labelLimit=240, symbolLimit=series_count),
-            scale=alt.Scale(range=COLOR_RANGE * 4),
+            "model_id:N",
+            legend=alt.Legend(orient="bottom", columns=min(4, model_count), labelLimit=240, symbolLimit=model_count),
+            scale=color_scale,
         ),
-        tooltip=[alt.Tooltip("series:N", title="Series"), alt.Tooltip("created_at:T", title="Time"), alt.Tooltip(f"{metric_name}:Q", title="Value", format=".4f")],
+        tooltip=[
+            alt.Tooltip("model_id:N", title="Model"),
+            alt.Tooltip("market_code:N", title="Market"),
+            alt.Tooltip("created_at:T", title="Time"),
+            alt.Tooltip(f"{metric_name}:Q", title="Value", format=".4f"),
+        ],
     )
-    line = base.mark_line(strokeWidth=2.4)
-    points = base.mark_point(size=56, filled=True)
+    if chart_df["market_code"].nunique() > 1:
+        base = base.encode(strokeDash=alt.StrokeDash("market_code:N", legend=None))
+    line = base.mark_line(strokeWidth=2.4).encode(opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15))).add_params(selection)
+    points = base.mark_point(size=56, filled=True).encode(opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)))
     return (line + points).properties(height=520)
+
+
+def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models: list[str]) -> alt.Chart | None:
+    filtered_trades = trades_df.copy()
+    if market_filter != "All":
+        filtered_trades = filtered_trades[filtered_trades["market_code"] == market_filter]
+    if selected_models:
+        filtered_trades = filtered_trades[filtered_trades["model_id"].isin(selected_models)]
+    if filtered_trades.empty:
+        return None
+
+    trades = filtered_trades.copy()
+    trades["created_at"] = pd.to_datetime(trades["created_at"])
+    trades["bucket"] = trades["created_at"].dt.floor("h")
+    grouped = trades.groupby(["bucket", "model_id", "side"], as_index=False)["gross_amount"].sum()
+    grouped["metric"] = grouped["side"].map({"BUY": "Buy", "SELL": "Sell"}).fillna(grouped["side"])
+    grouped = grouped.rename(columns={"bucket": "created_at", "gross_amount": "value"})
+    color_scale = _model_color_scale(selected_models or grouped["model_id"].dropna().tolist())
+
+    selection = _legend_highlight_selection("model_id")
+    return (
+        alt.Chart(grouped)
+        .mark_line(point=True, strokeWidth=2.2)
+        .encode(
+            x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
+            y=alt.Y("value:Q", title="Buy / sell notional"),
+            color=alt.Color("model_id:N", scale=color_scale, legend=alt.Legend(orient="bottom", columns=min(4, max(len(cost_df["model_id"].dropna().unique()), 1)), labelLimit=240)),
+            strokeDash=alt.StrokeDash("metric:N", legend=None, sort=["Buy", "Sell"]),
+            opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)),
+            tooltip=[
+                alt.Tooltip("model_id:N", title="Model"),
+                alt.Tooltip("metric:N", title="Metric"),
+                alt.Tooltip("created_at:T", title="Time"),
+                alt.Tooltip("value:Q", title="Value", format=".4f"),
+            ],
+        )
+        .add_params(selection)
+        .properties(height=300)
+    )
 
 
 def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter: str, selected_models: list[str]) -> alt.Chart | None:
@@ -398,36 +617,68 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
         trades["created_at"] = pd.to_datetime(trades["created_at"])
         trades["bucket"] = trades["created_at"].dt.floor("h")
         trades["trade_overhead"] = trades[["commission_amount", "tax_amount", "regulatory_fee_amount"]].fillna(0).sum(axis=1)
-        buy_sell = trades.groupby(["bucket", "side"], as_index=False)["gross_amount"].sum()
-        buy_sell["metric"] = buy_sell["side"].map({"BUY": "Buy notional", "SELL": "Sell notional"}).fillna(buy_sell["side"])
-        buy_sell = buy_sell.rename(columns={"bucket": "created_at", "gross_amount": "value"})[["created_at", "metric", "value"]]
-        frames.append(buy_sell)
-        fees = trades.groupby("bucket", as_index=False)["trade_overhead"].sum()
+        fees = trades.groupby(["bucket", "model_id"], as_index=False)["trade_overhead"].sum()
         fees["metric"] = "Trade overhead"
-        fees = fees.rename(columns={"bucket": "created_at", "trade_overhead": "value"})[["created_at", "metric", "value"]]
+        fees = fees.rename(columns={"bucket": "created_at", "trade_overhead": "value"})[["created_at", "model_id", "metric", "value"]]
         frames.append(fees)
     if not filtered_logs.empty:
         logs = filtered_logs.copy()
         logs["created_at"] = pd.to_datetime(logs["created_at"])
         logs["bucket"] = logs["created_at"].dt.floor("h")
         logs["estimated_cost_usd"] = pd.to_numeric(logs["estimated_cost_usd"], errors="coerce").fillna(0)
-        token_cost = logs.groupby("bucket", as_index=False)["estimated_cost_usd"].sum()
+        token_cost = logs.groupby(["bucket", "model_id"], as_index=False)["estimated_cost_usd"].sum()
         token_cost["metric"] = "LLM overhead"
-        token_cost = token_cost.rename(columns={"bucket": "created_at", "estimated_cost_usd": "value"})[["created_at", "metric", "value"]]
+        token_cost = token_cost.rename(columns={"bucket": "created_at", "estimated_cost_usd": "value"})[["created_at", "model_id", "metric", "value"]]
         frames.append(token_cost)
     if not frames:
         return None
     cost_df = pd.concat(frames, ignore_index=True)
+    color_scale = _model_color_scale(selected_models or cost_df["model_id"].dropna().tolist())
+    selection = _legend_highlight_selection("model_id")
     return (
         alt.Chart(cost_df)
         .mark_line(point=True, strokeWidth=2.2)
         .encode(
             x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
-            y=alt.Y("value:Q", title="Flow / overhead"),
-            color=alt.Color("metric:N", scale=alt.Scale(range=COLOR_RANGE), legend=alt.Legend(orient="bottom", columns=2)),
-            tooltip=[alt.Tooltip("metric:N", title="Metric"), alt.Tooltip("created_at:T", title="Time"), alt.Tooltip("value:Q", title="Value", format=".4f")],
+            y=alt.Y("value:Q", title="Overhead"),
+            color=alt.Color("model_id:N", scale=color_scale, legend=alt.Legend(orient="bottom", columns=min(4, max(len(cost_df["model_id"].dropna().unique()), 1)), labelLimit=240)),
+            strokeDash=alt.StrokeDash("metric:N", legend=None, sort=["Trade overhead", "LLM overhead"]),
+            opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)),
+            tooltip=[
+                alt.Tooltip("model_id:N", title="Model"),
+                alt.Tooltip("metric:N", title="Metric"),
+                alt.Tooltip("created_at:T", title="Time"),
+                alt.Tooltip("value:Q", title="Value", format=".4f"),
+            ],
         )
-        .properties(height=320)
+        .add_params(selection)
+        .properties(height=300)
+    )
+
+
+def market_pulse_chart(history_df: pd.DataFrame) -> alt.Chart:
+    instrument_count = max(len(history_df["display_name"].dropna().unique()), 1)
+    color_scale = alt.Scale(domain=list(dict.fromkeys(history_df["display_name"].dropna().tolist())), range=COLOR_RANGE[:instrument_count])
+    selection = _legend_highlight_selection("display_name")
+    return (
+        alt.Chart(history_df)
+        .mark_line(point=True, strokeWidth=2.2)
+        .encode(
+            x=alt.X("as_of:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
+            y=alt.Y("return_1h_pct:Q", title="Hourly move %"),
+            color=alt.Color("display_name:N", scale=color_scale, legend=alt.Legend(orient="bottom", columns=min(4, instrument_count), labelLimit=220)),
+            opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)),
+            tooltip=[
+                alt.Tooltip("display_name:N", title="Instrument"),
+                alt.Tooltip("ticker:N", title="Ticker"),
+                alt.Tooltip("as_of:T", title="Time"),
+                alt.Tooltip("return_1h_pct:Q", title="1h %", format=".3f"),
+                alt.Tooltip("return_1d_pct:Q", title="1d %", format=".3f"),
+                alt.Tooltip("current_price:Q", title="Price", format=".4f"),
+            ],
+        )
+        .add_params(selection)
+        .properties(height=460)
     )
 
 
@@ -459,6 +710,12 @@ if "dashboard_admin_token" not in st.session_state:
     st.session_state["dashboard_admin_token"] = ""
 if "dashboard_models" not in st.session_state:
     st.session_state["dashboard_models"] = []
+if "dashboard_auto_refresh" not in st.session_state:
+    st.session_state["dashboard_auto_refresh"] = False
+
+auto_refresh_enabled = bool(st.session_state.get("dashboard_auto_refresh", False))
+if auto_refresh_enabled:
+    components.html("<script>setTimeout(function(){ window.parent.location.reload(); }, 300000);</script>", height=0, width=0)
 
 api_base_url = str(st.session_state.get("dashboard_api_base_url", ""))
 selected_only = bool(st.session_state.get("dashboard_selected_only", True))
@@ -508,12 +765,12 @@ if chosen_models:
     if not runs_df.empty:
         runs_df = runs_df[runs_df["model_id"].isin(chosen_models)]
 
-render_hero(settings_payload, scheduler_payload, rankings_df)
+render_hero(settings_payload, scheduler_payload, rankings_df, news_batches)
 
 scheduler_df = pd.DataFrame(scheduler_payload.get("markets", []))
 
-ranking_tab, performance_tab, news_tab, detail_tab, admin_tab = st.tabs(
-    ["Ranking", "Performance", "Shared News", "Model Detail", "Admin"]
+ranking_tab, performance_tab, market_tab, news_tab, detail_tab, admin_tab = st.tabs(
+    ["Ranking", "Performance", "Market Pulse", "Shared News", "Model Detail", "Admin"]
 )
 
 with ranking_tab:
@@ -585,7 +842,7 @@ with performance_tab:
     st.markdown('<div class="asa-section-label">Trajectory</div>', unsafe_allow_html=True)
     metric_name = st.selectbox("Chart metric", ["total_return_pct", "total_equity"], index=0)
     performance_market = st.selectbox("Performance market", ["All", "KR", "US"], index=0)
-    performance_models = st.multiselect("Legend models", chosen_models or model_options, default=(chosen_models or model_options)[:8])
+    performance_models = st.multiselect("Legend models", chosen_models or model_options, default=(chosen_models or model_options))
     if snapshots_df.empty:
         st.info("No performance snapshots found.")
     else:
@@ -598,13 +855,77 @@ with performance_tab:
             st.caption("No performance rows match the current filters.")
         else:
             chart_df["created_at"] = pd.to_datetime(chart_df["created_at"])
-            chart_df["series"] = chart_df["model_id"] + " | " + chart_df["market_code"]
-            st.altair_chart(performance_chart(chart_df, metric_name), use_container_width=True)
+            st.altair_chart(performance_chart(chart_df, metric_name, performance_models), use_container_width=True)
+            buy_sell = buy_sell_chart(trades_df, performance_market, performance_models)
+            if buy_sell is not None:
+                st.markdown("**Buy / Sell**")
+                st.altair_chart(buy_sell, use_container_width=True)
             overhead = overhead_chart(trades_df, logs_all_df, performance_market, performance_models)
             if overhead is not None:
-                st.markdown("**Buy / Sell / Overhead**")
+                st.markdown("**Overhead**")
                 st.altair_chart(overhead, use_container_width=True)
 
+with market_tab:
+    st.markdown('<div class="asa-section-label">Market Pulse</div>', unsafe_allow_html=True)
+    pulse_controls = st.columns([1.1, 1.1, 2.2])
+    pulse_market = pulse_controls[0].selectbox("Market pulse market", ["KR", "US"], index=0)
+    pulse_window = pulse_controls[1].selectbox("History window", ["3M", "6M", "1Y", "All"], index=0)
+    pulse_controls[2].caption("Default view loads the latest 3 months. Use a wider window to explore older hourly history.")
+    price_history = pd.DataFrame(load_market_history(api_base_url or None, pulse_market, selected_only, top_n=20, limit_per_ticker=0))
+    instrument_registry = pd.DataFrame(load_market_instrument_registry(api_base_url or None, pulse_market))
+    if price_history.empty:
+        st.info("No tracked hourly market price history is stored yet for this market.")
+    else:
+        price_history["as_of"] = pd.to_datetime(price_history["as_of"], format="ISO8601", utc=True, errors="coerce")
+        price_history = price_history.dropna(subset=["as_of"])
+        now_utc = pd.Timestamp.now(tz="UTC")
+        window_days = {"3M": 92, "6M": 183, "1Y": 366, "All": None}
+        history_days = window_days.get(pulse_window)
+        if history_days is not None:
+            cutoff = now_utc - pd.Timedelta(days=history_days)
+            price_history = price_history[price_history["as_of"] >= cutoff]
+        price_history["display_name"] = price_history["instrument_name"].fillna(price_history["ticker"])
+        if not instrument_registry.empty:
+            instrument_registry = instrument_registry[instrument_registry["ticker"].isin(price_history["ticker"].unique())].copy()
+            instrument_registry["display_name"] = instrument_registry["instrument_name"].fillna(instrument_registry["ticker"])
+        st.altair_chart(market_pulse_chart(price_history), use_container_width=True)
+        latest_rows = (
+            price_history.sort_values(["ticker", "as_of"]).groupby("ticker", as_index=False).tail(1)
+            .sort_values(["return_1h_pct", "return_1d_pct"], ascending=[False, False])
+        )
+        st.markdown("**Latest tracked LLM movers**")
+        st.dataframe(
+            latest_rows[["display_name", "current_price", "return_1h_pct", "return_1d_pct", "intraday_volatility_pct", "latest_volume", "is_active"]].rename(
+                columns={
+                    "display_name": "Instrument",
+                    "current_price": "Price",
+                    "return_1h_pct": "1h %",
+                    "return_1d_pct": "1d %",
+                    "intraday_volatility_pct": "Volatility %",
+                    "latest_volume": "Latest volume",
+                    "is_active": "Active",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+    st.markdown("**Instrument registry**")
+    if instrument_registry.empty:
+        st.caption("No tracked instruments for this market yet.")
+    else:
+        st.dataframe(
+            instrument_registry[["display_name", "is_active", "first_seen_at", "last_seen_at", "delisted_at"]].rename(
+                columns={
+                    "display_name": "Instrument",
+                    "is_active": "Active",
+                    "first_seen_at": "First seen",
+                    "last_seen_at": "Last seen",
+                    "delisted_at": "Delisted at",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
 with news_tab:
     st.markdown('<div class="asa-section-label">Shared News</div>', unsafe_allow_html=True)
     if not settings_payload.get("news_enabled", False):
@@ -724,6 +1045,7 @@ with admin_tab:
     st.text_input("Admin token", type="password", key="dashboard_admin_token", help="Press Enter to apply.")
     st.text_input("FastAPI base URL", key="dashboard_api_base_url", placeholder="http://127.0.0.1:8000")
     st.checkbox("Selected models only", key="dashboard_selected_only")
+    st.toggle("Auto refresh every 5 minutes", key="dashboard_auto_refresh")
     st.multiselect("Visible models", model_options, key="dashboard_models")
     if st.button("Refresh data"):
         refresh_all()
@@ -894,5 +1216,11 @@ with admin_tab:
                     session.commit()
             refresh_all()
             st.rerun()
+
+
+
+
+
+
 
 
