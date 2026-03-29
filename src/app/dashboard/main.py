@@ -37,7 +37,7 @@ from app.services.admin import (
     create_or_update_model_profile,
     delete_model_profile,
     reset_simulation,
-    set_model_selection,
+    update_model_runtime,
     update_runtime_settings,
 )
 
@@ -557,7 +557,7 @@ def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models:
         base = base.encode(strokeDash=alt.StrokeDash("market_code:N", legend=None))
     line = base.mark_line(strokeWidth=2.4).encode(opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15))).add_params(selection)
     points = base.mark_point(size=56, filled=True).encode(opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)))
-    return (line + points).properties(height=520)
+    return (line + points).properties(height=520).interactive()
 
 
 def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models: list[str]) -> alt.Chart | None:
@@ -584,7 +584,7 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
         .encode(
             x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
             y=alt.Y("value:Q", title="Buy / sell notional"),
-            color=alt.Color("model_id:N", scale=color_scale, legend=alt.Legend(orient="bottom", columns=min(4, max(len(cost_df["model_id"].dropna().unique()), 1)), labelLimit=240)),
+            color=alt.Color("model_id:N", scale=color_scale, legend=alt.Legend(orient="bottom", columns=min(4, max(len(grouped["model_id"].dropna().unique()), 1)), labelLimit=240)),
             strokeDash=alt.StrokeDash("metric:N", legend=None, sort=["Buy", "Sell"]),
             opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)),
             tooltip=[
@@ -1098,27 +1098,90 @@ with admin_tab:
                 refresh_all()
                 st.rerun()
 
-        st.markdown("**Visibility and participation**")
-        visibility_target = st.selectbox("Toggle model participation", models_df["model_id"].tolist(), index=0 if not models_df.empty else None)
-        visibility_default = bool(models_df.loc[models_df["model_id"] == visibility_target, "is_selected"].iloc[0]) if visibility_target else False
-        keep_selected = st.checkbox("Selected for league", value=visibility_default)
-        if st.button("Save participation state", disabled=not bool(visibility_target)):
+        st.markdown("**Investment profiles**")
+        profile_columns = [
+            "model_id",
+            "display_name",
+            "request_model_id",
+            "is_selected",
+            "api_enabled",
+            "search_mode",
+            "uses_custom_prompt",
+            "pricing_label",
+        ]
+        st.dataframe(
+            models_df[profile_columns].rename(
+                columns={
+                    "model_id": "Profile ID",
+                    "display_name": "Display name",
+                    "request_model_id": "Request model",
+                    "is_selected": "In league",
+                    "api_enabled": "API enabled",
+                    "search_mode": "Search",
+                    "uses_custom_prompt": "Custom prompt",
+                    "pricing_label": "Pricing",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        profile_ids = models_df["model_id"].tolist()
+        runtime_target = st.selectbox("Profile runtime control", profile_ids, index=0 if profile_ids else None)
+        runtime_row = models_df.loc[models_df["model_id"] == runtime_target].iloc[0] if runtime_target else None
+        runtime_selected = bool(runtime_row["is_selected"]) if runtime_row is not None else False
+        runtime_api_enabled = bool(runtime_row["api_enabled"]) if runtime_row is not None else True
+        runtime_prompt = (runtime_row.get("custom_prompt") or "") if runtime_row is not None else ""
+        keep_selected = st.checkbox("Selected for league", value=runtime_selected)
+        api_enabled = st.checkbox("Enable API calls", value=runtime_api_enabled)
+        custom_prompt = st.text_area(
+            "Custom prompt template",
+            value=runtime_prompt,
+            height=180,
+            help="Optional. This prompt is used as the profile prompt for both markets. You can use {market_code}, {market_name}, {profile_id}, {request_model_id}, and {display_name} placeholders.",
+        )
+        control_cols = st.columns([1, 1, 1.4])
+        if control_cols[0].button("Save profile runtime", disabled=not bool(runtime_target)):
+            payload = {
+                "is_selected": keep_selected,
+                "api_enabled": api_enabled,
+                "custom_prompt": custom_prompt,
+            }
             if api_base_url:
                 with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
                     client.patch(
-                        f"/admin/models/{visibility_target}/selection",
+                        f"/admin/models/{runtime_target}",
                         headers={"X-Admin-Token": current_admin_token},
-                        json={"is_selected": keep_selected},
+                        json=payload,
                     ).raise_for_status()
             else:
                 with SessionLocal() as session:
-                    set_model_selection(session, visibility_target, keep_selected)
+                    update_model_runtime(
+                        session,
+                        runtime_target,
+                        is_selected=keep_selected,
+                        api_enabled=api_enabled,
+                        custom_prompt=custom_prompt,
+                    )
                     session.commit()
             refresh_all()
             st.rerun()
-        st.caption("Use participation toggle to keep data but remove a model from the active league.")
+        if control_cols[1].button("Delete profile", disabled=not bool(runtime_target)):
+            if api_base_url:
+                with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+                    client.delete(
+                        f"/admin/models/{runtime_target}",
+                        headers={"X-Admin-Token": current_admin_token},
+                    ).raise_for_status()
+            else:
+                with SessionLocal() as session:
+                    delete_model_profile(session, runtime_target)
+                    session.commit()
+            refresh_all()
+            st.rerun()
+        control_cols[2].caption("Turn off API calls to pause token usage without removing the profile from rankings and history.")
 
-        st.markdown("**Model management**")
+        st.markdown("**Create or update investment profile**")
         with st.form("model_add_form"):
             profile_id = st.text_input("Profile ID")
             request_model_id = st.text_input("Request model ID")
@@ -1127,13 +1190,17 @@ with admin_tab:
             prompt_price = st.number_input("Prompt price / 1M", min_value=0.0, value=0.0, step=0.01)
             completion_price = st.number_input("Completion price / 1M", min_value=0.0, value=0.0, step=0.01)
             select_profile = st.checkbox("Select profile immediately", value=True)
-            if st.form_submit_button("Add or update model"):
+            api_enabled_new = st.checkbox("Enable API calls immediately", value=True)
+            custom_prompt_new = st.text_area("Custom prompt template (optional)", height=180)
+            if st.form_submit_button("Add or update profile"):
                 payload = {
                     "profile_id": profile_id,
                     "request_model_id": request_model_id,
                     "display_name": display_name or profile_id,
                     "search_mode": search_mode,
                     "select_profile": select_profile,
+                    "api_enabled": api_enabled_new,
+                    "custom_prompt": custom_prompt_new,
                     "prompt_price_per_million": prompt_price if prompt_price > 0 else None,
                     "completion_price_per_million": completion_price if completion_price > 0 else None,
                 }
@@ -1151,6 +1218,8 @@ with admin_tab:
                             select_profile=payload["select_profile"],
                             prompt_price_per_million=payload["prompt_price_per_million"],
                             completion_price_per_million=payload["completion_price_per_million"],
+                            custom_prompt=payload["custom_prompt"],
+                            api_enabled=payload["api_enabled"],
                         )
                         session.commit()
                 refresh_all()
@@ -1216,6 +1285,12 @@ with admin_tab:
                     session.commit()
             refresh_all()
             st.rerun()
+
+
+
+
+
+
 
 
 

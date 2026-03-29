@@ -10,3 +10,6 @@ venv/
 .idea/
 .vscode/
 *.egg-info/
+*.db-wal
+*.db-shm
+logs/

@@ -10,7 +10,7 @@ from app.db.session import SessionLocal
 from app.market_data.provider import YahooMarketDataProvider
 from app.market_data.screener import MarketScreener
 from app.orchestration.trading_cycle import TradingCycleService
-from app.services.admin import get_scheduler_status, update_market_scheduler_state
+from app.services.admin import get_scheduler_status, is_model_api_enabled, update_market_scheduler_state
 from app.services.bootstrap import create_schema
 from app.services.market_history import record_market_snapshot
 from app.services.run_requests import create_run_request, mark_run_request_finished, mark_run_request_started
@@ -71,11 +71,12 @@ class RuntimeSchedulerService:
             raise
 
         with SessionLocal() as session:
-            selected_model_ids = list(
+            selected_models = list(
                 session.scalars(
-                    select(LLMModel.model_id).where(LLMModel.is_selected.is_(True)).order_by(LLMModel.model_id.asc())
+                    select(LLMModel).where(LLMModel.is_selected.is_(True)).order_by(LLMModel.model_id.asc())
                 ).all()
             )
+            selected_model_ids = [model.model_id for model in selected_models if is_model_api_enabled(model)]
         if not selected_model_ids:
             with SessionLocal() as session:
                 update_market_scheduler_state(
@@ -158,3 +159,5 @@ class RuntimeSchedulerService:
             )
             session.commit()
         return message
+
+

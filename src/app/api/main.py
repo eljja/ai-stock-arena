@@ -29,6 +29,7 @@ from app.api.schemas import (
     MarketPriceHistoryPoint,
     ModelProfileUpsertRequest,
     ModelSelectionUpdate,
+    ModelRuntimeUpdate,
     ModelRanking,
     ModelSummary,
     NewsBatchSummary,
@@ -50,6 +51,7 @@ from app.services.admin import (
     delete_model_profile,
     reset_simulation,
     set_model_selection,
+    update_model_runtime,
     update_runtime_settings,
 )
 
@@ -298,6 +300,8 @@ def upsert_model_profile(
         prompt_price_per_million=payload.prompt_price_per_million,
         completion_price_per_million=payload.completion_price_per_million,
         context_length=payload.context_length,
+        custom_prompt=payload.custom_prompt,
+        api_enabled=payload.api_enabled,
     )
     session.commit()
     return next(item for item in list_models(session=session, selected_only=False) if item.model_id == model.model_id)
@@ -312,6 +316,27 @@ def update_model_selection(
 ) -> ModelSummary:
     try:
         model = set_model_selection(session=session, profile_id=model_id, is_selected=payload.is_selected)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    session.commit()
+    return next(item for item in list_models(session=session, selected_only=False) if item.model_id == model.model_id)
+
+
+@app.patch("/admin/models/{model_id:path}", response_model=ModelSummary)
+def update_model_runtime_endpoint(
+    model_id: str,
+    payload: ModelRuntimeUpdate,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ModelSummary:
+    try:
+        model = update_model_runtime(
+            session=session,
+            profile_id=model_id,
+            is_selected=payload.is_selected,
+            api_enabled=payload.api_enabled,
+            custom_prompt=payload.custom_prompt,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     session.commit()

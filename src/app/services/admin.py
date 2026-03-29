@@ -20,7 +20,7 @@ from app.db.models import (
     SharedNewsItem,
     Trade,
 )
-from app.services.setup_helpers import ensure_model_market_state
+from app.services.setup_helpers import ensure_model_market_state, resolve_profile_prompt
 
 RUNTIME_SETTINGS_KEY = "runtime_controls"
 SCHEDULER_STATE_KEY = "scheduler_state"
@@ -230,8 +230,14 @@ def reset_simulation(session: Session, reset_prompts: bool = True) -> dict[str, 
             if prompt.market_code not in enabled_markets:
                 session.delete(prompt)
                 continue
-            prompt.prompt_content = "PENDING_GENERATION"
-            prompt.source_meta_prompt = "Pending model-specific prompt generation."
+            model = session.scalar(select(LLMModel).where(LLMModel.model_id == prompt.model_id))
+            custom_prompt = resolve_profile_prompt(model, prompt.market_code)
+            if custom_prompt:
+                prompt.prompt_content = custom_prompt
+                prompt.source_meta_prompt = "Admin custom prompt."
+            else:
+                prompt.prompt_content = "PENDING_GENERATION"
+                prompt.source_meta_prompt = "Pending model-specific prompt generation."
 
     for model in session.scalars(select(LLMModel).where(LLMModel.is_selected.is_(True))).all():
         for market_code in enabled_markets:
@@ -275,6 +281,8 @@ def create_or_update_model_profile(
     prompt_price_per_million: float | None = None,
     completion_price_per_million: float | None = None,
     context_length: int | None = None,
+    custom_prompt: str | None = None,
+    api_enabled: bool = True,
 ) -> LLMModel:
     model = session.scalar(select(LLMModel).where(LLMModel.model_id == profile_id))
     if model is None:
@@ -302,6 +310,8 @@ def create_or_update_model_profile(
             "search_mode": search_mode,
             "pricing_label": _pricing_label(prompt_price_per_million, completion_price_per_million),
             "is_free_like": bool(request_model_id.endswith(":free") or request_model_id.endswith(":free:online")),
+            "custom_prompt": (custom_prompt or "").strip() or None,
+            "api_enabled": bool(api_enabled),
         }
     )
     model.metadata_json = metadata
@@ -309,6 +319,7 @@ def create_or_update_model_profile(
     if select_profile:
         for market in session.scalars(select(MarketSetting).where(MarketSetting.enabled.is_(True))).all():
             ensure_model_market_state(session, model_id=profile_id, market_code=market.market_code, display_name=display_name)
+            _sync_model_prompt_for_market(session, model, market.market_code)
 
     session.flush()
     return model
@@ -323,6 +334,41 @@ def set_model_selection(session: Session, profile_id: str, is_selected: bool) ->
     return model
 
 
+def update_model_runtime(
+    session: Session,
+    profile_id: str,
+    *,
+    is_selected: bool | None = None,
+    api_enabled: bool | None = None,
+    custom_prompt: str | None = None,
+) -> LLMModel:
+    model = session.scalar(select(LLMModel).where(LLMModel.model_id == profile_id))
+    if model is None:
+        raise ValueError(f"Model not found: {profile_id}")
+
+    metadata = model.metadata_json or {}
+    if is_selected is not None:
+        model.is_selected = is_selected
+    if api_enabled is not None:
+        metadata["api_enabled"] = bool(api_enabled)
+    if custom_prompt is not None:
+        metadata["custom_prompt"] = custom_prompt.strip() or None
+    model.metadata_json = metadata
+
+    if model.is_selected:
+        for market in session.scalars(select(MarketSetting).where(MarketSetting.enabled.is_(True))).all():
+            ensure_model_market_state(session, model_id=profile_id, market_code=market.market_code, display_name=model.display_name)
+            _sync_model_prompt_for_market(session, model, market.market_code)
+
+    session.flush()
+    return model
+
+
+def is_model_api_enabled(model: LLMModel) -> bool:
+    metadata = model.metadata_json or {}
+    return bool(metadata.get("api_enabled", True))
+
+
 def delete_model_profile(session: Session, profile_id: str) -> dict[str, int]:
     session.execute(delete(LLMDecisionLog).where(LLMDecisionLog.model_id == profile_id))
     session.execute(delete(RunRequest).where(RunRequest.model_id == profile_id))
@@ -334,6 +380,25 @@ def delete_model_profile(session: Session, profile_id: str) -> dict[str, int]:
     deleted = session.execute(delete(LLMModel).where(LLMModel.model_id == profile_id)).rowcount or 0
     session.flush()
     return {"deleted_models": deleted}
+
+
+def _sync_model_prompt_for_market(session: Session, model: LLMModel, market_code: str) -> None:
+    prompt = session.scalar(
+        select(ModelMarketPrompt).where(
+            ModelMarketPrompt.model_id == model.model_id,
+            ModelMarketPrompt.market_code == market_code,
+            ModelMarketPrompt.is_active.is_(True),
+        )
+    )
+    if prompt is None:
+        return
+    custom_prompt = resolve_profile_prompt(model, market_code)
+    if custom_prompt:
+        prompt.prompt_content = custom_prompt
+        prompt.source_meta_prompt = "Admin custom prompt."
+    elif prompt.source_meta_prompt == "Admin custom prompt.":
+        prompt.prompt_content = "PENDING_GENERATION"
+        prompt.source_meta_prompt = "Pending model-specific prompt generation."
 
 
 def _pricing_label(prompt_price_per_million: float | None, completion_price_per_million: float | None) -> str:
@@ -436,4 +501,3 @@ def _minutes_to_hhmm(total_minutes: int) -> str:
     hour = normalized // 60
     minute = normalized % 60
     return f"{hour:02d}:{minute:02d}"
-

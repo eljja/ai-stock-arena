@@ -249,3 +249,4 @@ def _default_meta_prompt(market_code: str) -> str:
         "context, keep the portfolio under 10 positions, and account for market-specific fees and taxes. "
         "Return a production-ready prompt that will later be used for hourly virtual trading decisions."
     )
+

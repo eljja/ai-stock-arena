@@ -40,7 +40,7 @@ from app.db.models import (
     SharedNewsItem,
     Trade,
 )
-from app.services.admin import get_runtime_settings, get_scheduler_status
+from app.services.admin import get_runtime_settings, get_scheduler_status, is_model_api_enabled
 from app.services.market_history import tracked_tickers_for_market
 
 
@@ -548,6 +548,7 @@ def get_scheduler_status_response(session: Session) -> SchedulerStatusResponse:
 
 def _serialize_model(model: LLMModel) -> ModelSummary:
     metadata = model.metadata_json or {}
+    custom_prompt = metadata.get("custom_prompt")
     return ModelSummary(
         model_id=model.model_id,
         display_name=model.display_name,
@@ -555,12 +556,15 @@ def _serialize_model(model: LLMModel) -> ModelSummary:
         search_mode=metadata.get("search_mode", "off"),
         is_selected=model.is_selected,
         is_available=model.is_available,
+        api_enabled=is_model_api_enabled(model),
         is_free_like=bool(metadata.get("is_free_like", _infer_is_free_like(model))),
         pricing_label=metadata.get("pricing_label") or _pricing_label(model),
         prompt_price_per_million=model.prompt_price_per_million,
         completion_price_per_million=model.completion_price_per_million,
         context_length=model.context_length,
         probe_detail=metadata.get("probe_detail"),
+        custom_prompt=custom_prompt,
+        uses_custom_prompt=bool(custom_prompt),
         updated_at=model.updated_at,
     )
 
@@ -747,6 +751,8 @@ def _log_float(log: LLMDecisionLog, key: str) -> float | None:
     if value in (None, ""):
         return None
     return float(value)
+
+
 
 
 

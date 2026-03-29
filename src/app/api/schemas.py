@@ -17,12 +17,15 @@ class ModelSummary(BaseModel):
     search_mode: str
     is_selected: bool
     is_available: bool
+    api_enabled: bool
     is_free_like: bool
     pricing_label: str
     prompt_price_per_million: float | None
     completion_price_per_million: float | None
     context_length: int | None
     probe_detail: str | None
+    custom_prompt: str | None
+    uses_custom_prompt: bool
     updated_at: datetime
 
 
@@ -185,6 +188,8 @@ class ModelProfileUpsertRequest(BaseModel):
     provider: str = "openrouter"
     search_mode: str = "off"
     select_profile: bool = True
+    api_enabled: bool = True
+    custom_prompt: str | None = None
     prompt_price_per_million: float | None = None
     completion_price_per_million: float | None = None
     context_length: int | None = None
@@ -192,6 +197,12 @@ class ModelProfileUpsertRequest(BaseModel):
 
 class ModelSelectionUpdate(BaseModel):
     is_selected: bool
+
+
+class ModelRuntimeUpdate(BaseModel):
+    is_selected: bool | None = None
+    api_enabled: bool | None = None
+    custom_prompt: str | None = None
 
 
 class NewsItemSummary(BaseModel):
@@ -255,6 +266,7 @@ class LLMDecisionLogSummary(BaseModel):
     error_message: str | None
     created_at: datetime
 
+
 class RunRequestSummary(BaseModel):
     id: int
     model_id: str
@@ -290,4 +302,3 @@ class CopyTradeResponse(BaseModel):
     cash_weight_pct: float
     positions: list[CopyTradePosition]
     recent_trades: list[TradeSummary]
-
