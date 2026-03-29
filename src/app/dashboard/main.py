@@ -524,6 +524,8 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
 def model_allocation_frame(model_id: str, positions_df: pd.DataFrame, portfolios_df: pd.DataFrame, top_n: int = 6) -> pd.DataFrame:
     if positions_df.empty or portfolios_df.empty:
         return pd.DataFrame(columns=["label", "weight_pct"])
+    if "model_id" not in positions_df.columns or "model_id" not in portfolios_df.columns:
+        return pd.DataFrame(columns=["label", "weight_pct"])
     model_positions = positions_df[positions_df["model_id"] == model_id].copy()
     model_portfolios = portfolios_df[portfolios_df["model_id"] == model_id].copy()
     rows: list[dict[str, float | str]] = []
@@ -553,7 +555,7 @@ COLOR_RANGE = ["#00c2ff", "#2d7ff9", "#5a4bff", "#845ef7", "#b84cff", "#ff4ecd",
 def allocation_chart(allocation_df: pd.DataFrame) -> alt.Chart:
     if allocation_df.empty:
         return alt.Chart(pd.DataFrame({"label": [], "weight_pct": []})).mark_bar()
-    return (
+    return _apply_chart_theme(
         alt.Chart(allocation_df)
         .mark_bar(cornerRadiusEnd=5)
         .encode(
@@ -591,6 +593,28 @@ def _padded_domain(values: pd.Series, pad_ratio: float = 0.05) -> list[float] | 
     return [lower - padding, upper + padding]
 
 
+
+def _apply_chart_theme(chart):
+    return (
+        chart
+        .configure(background="transparent")
+        .configure_view(fill="transparent", stroke=None)
+        .configure_axis(
+            labelColor="#cbd5e1",
+            titleColor="#94a3b8",
+            domainColor="rgba(148,163,184,0.35)",
+            gridColor="rgba(148,163,184,0.12)",
+            tickColor="rgba(148,163,184,0.35)",
+        )
+        .configure_legend(
+            labelColor="#e2e8f0",
+            titleColor="#94a3b8",
+            symbolStrokeColor="#e2e8f0",
+        )
+        .configure_title(color="#f8fafc")
+    )
+
+
 def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models: list[str], *, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart:
     model_count = max(len(chart_df["model_id"].dropna().unique()), 1)
     color_scale = _model_color_scale(selected_models or chart_df["model_id"].dropna().tolist())
@@ -618,7 +642,7 @@ def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models:
     chart = (line + points).properties(height=260)
     if x_zoom is not None:
         chart = chart.add_params(x_zoom)
-    return chart
+    return _apply_chart_theme(chart)
 
 
 def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
@@ -659,7 +683,7 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
     )
     if x_zoom is not None:
         chart = chart.add_params(x_zoom)
-    return chart
+    return _apply_chart_theme(chart)
 
 
 def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
@@ -719,14 +743,14 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
     )
     if x_zoom is not None:
         chart = chart.add_params(x_zoom)
-    return chart
+    return _apply_chart_theme(chart)
 
 
 def market_pulse_chart(history_df: pd.DataFrame) -> alt.Chart:
     instrument_count = max(len(history_df["display_name"].dropna().unique()), 1)
     color_scale = alt.Scale(domain=list(dict.fromkeys(history_df["display_name"].dropna().tolist())), range=COLOR_RANGE[:instrument_count])
     selection = _legend_highlight_selection("display_name")
-    return (
+    return _apply_chart_theme(
         alt.Chart(history_df)
         .mark_line(point=True, strokeWidth=2.2)
         .encode(
@@ -940,7 +964,7 @@ with performance_tab:
             if overhead is not None:
                 st.markdown("**Overhead:** Solid line = Trade overhead, dashed line = LLM overhead.")
                 charts.append(overhead)
-            performance_bundle = alt.vconcat(*charts, spacing=18).add_params(legend_selection, x_zoom)
+            performance_bundle = _apply_chart_theme(alt.vconcat(*charts, spacing=18).add_params(legend_selection, x_zoom))
             chart_col, _ = st.columns([5, 1])
             chart_col.altair_chart(performance_bundle, use_container_width=True)
 
@@ -1031,10 +1055,10 @@ with detail_tab:
         detail_model = st.selectbox("Model", model_options, index=0)
         detail_market = st.selectbox("Market", ["KR", "US"], index=0)
         model_logs = load_model_logs(api_base_url or None, detail_model, detail_market)
-        model_runs = runs_df[(runs_df["model_id"] == detail_model) & (runs_df["market_code"] == detail_market)] if not runs_df.empty else pd.DataFrame()
-        model_portfolios = portfolios_df[(portfolios_df["model_id"] == detail_model) & (portfolios_df["market_code"] == detail_market)]
-        model_positions = positions_df[(positions_df["model_id"] == detail_model) & (positions_df["market_code"] == detail_market)]
-        model_trades = trades_df[(trades_df["model_id"] == detail_model) & (trades_df["market_code"] == detail_market)]
+        model_runs = runs_df[(runs_df["model_id"] == detail_model) & (runs_df["market_code"] == detail_market)] if not runs_df.empty and {"model_id", "market_code"}.issubset(runs_df.columns) else pd.DataFrame()
+        model_portfolios = portfolios_df[(portfolios_df["model_id"] == detail_model) & (portfolios_df["market_code"] == detail_market)] if {"model_id", "market_code"}.issubset(portfolios_df.columns) else pd.DataFrame()
+        model_positions = positions_df[(positions_df["model_id"] == detail_model) & (positions_df["market_code"] == detail_market)] if {"model_id", "market_code"}.issubset(positions_df.columns) else pd.DataFrame()
+        model_trades = trades_df[(trades_df["model_id"] == detail_model) & (trades_df["market_code"] == detail_market)] if {"model_id", "market_code"}.issubset(trades_df.columns) else pd.DataFrame()
         if not model_portfolios.empty:
             row = model_portfolios.iloc[0]
             detail_metrics = st.columns(4)
