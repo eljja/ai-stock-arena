@@ -326,3 +326,16 @@ class CopyTradeResponse(BaseModel):
     cash_weight_pct: float
     positions: list[CopyTradePosition]
     recent_trades: list[TradeSummary]
+
+
+class ExecutionEventSummary(BaseModel):
+    id: int
+    event_type: str
+    target_type: str
+    model_id: str | None
+    market_code: str | None
+    trigger_source: str | None
+    status: str
+    code: str | None
+    message: str | None
+    created_at: datetime

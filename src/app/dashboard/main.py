@@ -27,6 +27,7 @@ from app.api.query_service import (
     list_portfolios,
     list_positions,
     list_run_requests,
+    list_execution_events,
     list_rankings,
     list_snapshots,
     list_trades,
@@ -156,9 +157,22 @@ def load_market_instrument_registry(api_base_url: str | None, market_code: str) 
         ]
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def load_execution_events(api_base_url: str | None, limit: int, offset: int = 0) -> list[dict]:
+    if api_base_url:
+        with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+            return client.get("/execution-events", params={"limit": limit, "offset": offset}).json()
+    with SessionLocal() as session:
+        return [
+            item.model_dump(mode="json")
+            for item in list_execution_events(session=session, limit=limit, offset=offset)
+        ]
+
+
 def refresh_all() -> None:
     load_base_data.clear()
     load_model_logs.clear()
+    load_execution_events.clear()
 
 
 
@@ -918,6 +932,8 @@ if "dashboard_models" not in st.session_state:
     st.session_state["dashboard_models"] = []
 if "dashboard_auto_refresh" not in st.session_state:
     st.session_state["dashboard_auto_refresh"] = False
+if "dashboard_execution_event_limit" not in st.session_state:
+    st.session_state["dashboard_execution_event_limit"] = 30
 
 auto_refresh_enabled = bool(st.session_state.get("dashboard_auto_refresh", False))
 if auto_refresh_enabled:
@@ -927,6 +943,8 @@ api_base_url = str(st.session_state.get("dashboard_api_base_url", ""))
 selected_only = bool(st.session_state.get("dashboard_selected_only", True))
 
 payload = load_base_data(api_base_url or None, selected_only)
+execution_event_limit = int(st.session_state.get("dashboard_execution_event_limit", 30))
+execution_events_payload = load_execution_events(api_base_url or None, execution_event_limit + 1, 0)
 overview = payload["overview"]
 settings_payload = payload["settings"] or {
     "decision_interval_minutes": 60,
@@ -952,6 +970,7 @@ snapshots_df = _frame_with_columns(payload["snapshots"], ["model_id", "market_co
 news_batches = payload["news"]
 logs_all_df = _frame_with_columns(payload.get("logs", []), ["model_id", "market_code", "created_at", "estimated_cost_usd"])
 runs_df = _frame_with_columns(payload.get("runs", []), ["model_id", "market_code", "requested_at", "started_at", "completed_at", "snapshot_as_of", "status", "summary_message", "error_message"])
+execution_events_df = _frame_with_columns(execution_events_payload, ["event_type", "target_type", "model_id", "market_code", "trigger_source", "status", "code", "message", "created_at"])
 
 model_options = models_df["model_id"].tolist() if not models_df.empty else []
 default_models = models_df.loc[models_df["is_selected"], "model_id"].tolist() if not models_df.empty else []
@@ -1638,6 +1657,45 @@ with admin_tab:
                 use_container_width=True,
                 hide_index=True,
             )
+
+        st.markdown("**Execution log (UTC)**")
+        execution_events_view = _utc_frame(execution_events_df, ["created_at"]) if not execution_events_df.empty else execution_events_df
+        visible_limit = int(st.session_state.get("dashboard_execution_event_limit", 30))
+        if execution_events_view.empty:
+            st.caption("No execution events recorded yet.")
+        else:
+            event_view = execution_events_view.head(visible_limit).copy()
+            event_view["target"] = event_view.apply(
+                lambda row: (
+                    f"news {row.get('market_code', '')}"
+                    if row.get("event_type") == "news"
+                    else f"{row.get('model_id', '')} / {row.get('market_code', '')}".strip(" /")
+                ),
+                axis=1,
+            )
+            st.dataframe(
+                event_view[["created_at", "target", "trigger_source", "status", "code", "message"]].rename(
+                    columns={
+                        "created_at": "Time (UTC)",
+                        "target": "Target",
+                        "trigger_source": "Trigger",
+                        "status": "Status",
+                        "code": "Code",
+                        "message": "Message",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+                height=420,
+            )
+            event_control_cols = st.columns([1, 1.4, 3])
+            if visible_limit < len(execution_events_view) and event_control_cols[0].button("Load more logs"):
+                st.session_state["dashboard_execution_event_limit"] = visible_limit + 30
+                st.rerun()
+            if visible_limit > 30 and event_control_cols[1].button("Reset log view"):
+                st.session_state["dashboard_execution_event_limit"] = 30
+                st.rerun()
+            event_control_cols[2].caption("The admin log shows recent one-line trade and news execution results. Use Load more to page through older rows.")
 
         st.caption("Destructive model deletion remains admin-only. Use API disable to stop token usage without deleting history.")
 

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.query_service import (
     get_copy_trade,
+    list_execution_events,
     get_overview,
     get_runtime_settings_response,
     get_scheduler_status_response,
@@ -23,6 +24,7 @@ from app.api.query_service import (
 )
 from app.api.schemas import (
     CopyTradeResponse,
+    ExecutionEventSummary,
     HealthResponse,
     LLMDecisionLogSummary,
     MarketInstrumentSummary,
@@ -245,6 +247,27 @@ def llm_logs(
     session: Session = Depends(get_session),
 ) -> list[LLMDecisionLogSummary]:
     return list_llm_logs(session=session, model_id=model_id, market_code=market_code, limit=limit)
+
+
+@app.get("/execution-events", response_model=list[ExecutionEventSummary])
+def execution_events(
+    event_type: str | None = Query(default=None),
+    market_code: str | None = Query(default=None),
+    model_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    session: Session = Depends(get_session),
+) -> list[ExecutionEventSummary]:
+    return list_execution_events(
+        session=session,
+        event_type=event_type,
+        market_code=market_code,
+        model_id=model_id,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @app.get("/copy-trade/{model_id:path}", response_model=CopyTradeResponse)

@@ -9,6 +9,7 @@ from app.market_data.provider import YahooMarketDataProvider
 from app.market_data.screener import MarketScreener
 from app.orchestration.trading_cycle import TradingCycleService
 from app.services.bootstrap import create_schema
+from app.services.execution_events import create_execution_event
 from app.services.market_history import record_market_snapshot
 from app.services.run_requests import create_run_request, mark_run_request_finished, mark_run_request_started
 from app.services.setup_helpers import ensure_model_market_state
@@ -113,6 +114,7 @@ def run_cycle(market_code: str, model_id: str, candidate_limit: int = 15) -> Non
             run = session.get(RunRequest, run_id)
             if run is not None:
                 mark_run_request_finished(session, run, status="success", message=summary)
+                create_execution_event(session, event_type="trade", target_type="model", model_id=model_id, market_code=market_code, trigger_source="manual_cli", status="success", message=summary)
                 session.commit()
     except Exception as exc:
         with SessionLocal() as session:
@@ -125,6 +127,7 @@ def run_cycle(market_code: str, model_id: str, candidate_limit: int = 15) -> Non
                     message=f"Manual run failed for {model_id} / {market_code}.",
                     error_message=str(exc),
                 )
+                create_execution_event(session, event_type="trade", target_type="model", model_id=model_id, market_code=market_code, trigger_source="manual_cli", status="error", code=exc.__class__.__name__, message=str(exc))
                 session.commit()
         raise
 

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.db.models import AdminSetting, SharedNewsBatch, SharedNewsItem
 from app.news.marketaux import MarketauxNewsClient, MarketauxNewsItem
 from app.services.admin import get_runtime_settings, get_scheduler_status
+from app.services.execution_events import create_execution_event
 
 NEWS_STATE_KEY = "shared_news_state"
 DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES = 30
@@ -82,7 +83,7 @@ def run_due_news_refreshes(session: Session) -> list[str]:
         if not _is_news_due(session, market_code, refresh_interval_minutes=refresh_interval_minutes):
             continue
         try:
-            results.append(refresh_shared_news_for_market(session, market_code))
+            results.append(refresh_shared_news_for_market(session, market_code, trigger_source="scheduler"))
             session.commit()
         except Exception as exc:
             update_shared_news_state(
@@ -92,12 +93,13 @@ def run_due_news_refreshes(session: Session) -> list[str]:
                 last_status="error",
                 last_message=str(exc),
             )
+            create_execution_event(session, event_type="news", target_type="market", market_code=market_code, trigger_source="scheduler", status="error", code=exc.__class__.__name__, message=str(exc))
             session.commit()
             results.append(f"Shared news refresh failed for {market_code}: {exc}")
     return results
 
 
-def refresh_shared_news_for_market(session: Session, market_code: str) -> str:
+def refresh_shared_news_for_market(session: Session, market_code: str, *, trigger_source: str = "scheduler") -> str:
     runtime_settings = get_runtime_settings(session)
     collection_policy = runtime_settings.get("news_collection_policy", DEVELOPMENT_FALLBACK)
     started_at = datetime.now(UTC)
@@ -140,6 +142,7 @@ def refresh_shared_news_for_market(session: Session, market_code: str) -> str:
             last_status="empty",
             last_message=message,
         )
+        create_execution_event(session, event_type="news", target_type="market", market_code=market_code, trigger_source=trigger_source, status="empty", message=message)
         return message
 
     batch = _store_news_batch(session, market_code, articles, created_at=window_end, window_label=selected_window_label)
@@ -158,6 +161,7 @@ def refresh_shared_news_for_market(session: Session, market_code: str) -> str:
         last_status="success",
         last_message=message,
     )
+    create_execution_event(session, event_type="news", target_type="market", market_code=market_code, trigger_source=trigger_source, status="success", message=message)
     return message
 
 

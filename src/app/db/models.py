@@ -252,3 +252,18 @@ class RunRequest(Base):
     summary_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+
+
+class ExecutionEvent(Base):
+    __tablename__ = "execution_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_type: Mapped[str] = mapped_column(String(30), index=True)
+    target_type: Mapped[str] = mapped_column(String(30), index=True)
+    model_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    market_code: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    trigger_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    code: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)

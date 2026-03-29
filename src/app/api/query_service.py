@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.api.schemas import (
     CopyTradePosition,
     CopyTradeResponse,
+    ExecutionEventSummary,
     LLMDecisionLogSummary,
     ModelRanking,
     MarketInstrumentSummary,
@@ -28,6 +29,7 @@ from app.api.schemas import (
 )
 from app.db.models import (
     LLMDecisionLog,
+    ExecutionEvent,
     HourlyMarketPrice,
     LLMModel,
     MarketInstrument,
@@ -489,6 +491,42 @@ def list_run_requests(
         )
         for run in runs
     ]
+
+def list_execution_events(
+    session: Session,
+    event_type: str | None = None,
+    market_code: str | None = None,
+    model_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[ExecutionEventSummary]:
+    stmt = select(ExecutionEvent).order_by(ExecutionEvent.created_at.desc(), ExecutionEvent.id.desc())
+    if event_type:
+        stmt = stmt.where(ExecutionEvent.event_type == event_type)
+    if market_code:
+        stmt = stmt.where(ExecutionEvent.market_code == market_code)
+    if model_id:
+        stmt = stmt.where(ExecutionEvent.model_id == model_id)
+    if status:
+        stmt = stmt.where(ExecutionEvent.status == status)
+    rows = session.scalars(stmt.offset(offset).limit(limit)).all()
+    return [
+        ExecutionEventSummary(
+            id=row.id,
+            event_type=row.event_type,
+            target_type=row.target_type,
+            model_id=row.model_id,
+            market_code=row.market_code,
+            trigger_source=row.trigger_source,
+            status=row.status,
+            code=row.code,
+            message=row.message,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
 
 def get_copy_trade(session: Session, model_id: str, market_code: str) -> CopyTradeResponse:
     portfolio = session.scalar(

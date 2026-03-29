@@ -21,6 +21,7 @@ from app.db.models import (
     SharedNewsItem,
     Trade,
 )
+from app.services.execution_events import create_execution_event
 from app.services.setup_helpers import ensure_model_market_state, resolve_profile_prompt
 
 RUNTIME_SETTINGS_KEY = "runtime_controls"
@@ -535,10 +536,12 @@ def run_manual_news_refreshes(session: Session, market_code: str | None = None) 
     messages: list[str] = []
     for code in market_codes:
         try:
-            messages.append(refresh_shared_news_for_market(session, code))
+            messages.append(refresh_shared_news_for_market(session, code, trigger_source="manual_admin"))
             session.commit()
         except Exception as exc:
             session.rollback()
+            create_execution_event(session, event_type="news", target_type="market", market_code=code, trigger_source="manual_admin", status="error", code=exc.__class__.__name__, message=str(exc))
+            session.commit()
             messages.append(f"Shared news refresh failed for {code}: {exc}")
     return messages
 
@@ -551,7 +554,7 @@ def run_manual_trade_cycles(session: Session, market_code: str | None = None) ->
     messages: list[str] = []
     for code in market_codes:
         try:
-            messages.append(service.run_market_cycle(code))
+            messages.append(service.run_market_cycle(code, trigger_source="manual_admin"))
         except Exception as exc:
             messages.append(f"Trade cycle failed for {code}: {exc}")
     return messages
