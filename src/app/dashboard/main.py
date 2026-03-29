@@ -37,9 +37,11 @@ from app.db.session import SessionLocal
 from app.services.admin import (
     create_or_update_model_profile,
     delete_model_profile,
+    list_market_fee_settings,
     reset_simulation,
     run_manual_news_refreshes,
     run_manual_trade_cycles,
+    update_market_fee_settings,
     update_model_runtime,
     update_runtime_settings,
 )
@@ -169,10 +171,20 @@ def load_execution_events(api_base_url: str | None, limit: int, offset: int = 0)
         ]
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def load_market_fee_settings(api_base_url: str | None, admin_token: str) -> list[dict]:
+    if api_base_url:
+        with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+            return client.get("/admin/market-fees", headers={"X-Admin-Token": admin_token}).json()
+    with SessionLocal() as session:
+        return list_market_fee_settings(session)
+
+
 def refresh_all() -> None:
     load_base_data.clear()
     load_model_logs.clear()
     load_execution_events.clear()
+    load_market_fee_settings.clear()
 
 
 
@@ -1401,6 +1413,69 @@ with admin_tab:
                         session.commit()
                 refresh_all()
                 st.rerun()
+
+        market_fee_rows = load_market_fee_settings(api_base_url or None, current_admin_token)
+        market_fee_map = {row["market_code"]: row for row in market_fee_rows}
+        st.markdown("**Market trade fees**")
+        st.caption("Commission sliders use practical ranges. Tax can go up to 5%. Regulatory fee is kept tighter because live values are typically much smaller.")
+        fee_cols = st.columns(2)
+        for idx, market_code in enumerate(["KR", "US"]):
+            market_fee = market_fee_map.get(market_code, {
+                "market_code": market_code,
+                "market_name": market_code,
+                "currency": "",
+                "buy_commission_pct": 0.0,
+                "sell_commission_pct": 0.0,
+                "sell_tax_pct": 0.0,
+                "sell_regulatory_fee_pct": 0.0,
+            })
+            with fee_cols[idx]:
+                st.markdown(f"***{market_fee['market_name']} ({market_code})***")
+                with st.form(f"market_fee_form_{market_code}"):
+                    buy_commission_pct = st.slider(
+                        f"{market_code} buy commission (%)",
+                        min_value=0.0,
+                        max_value=1.0,
+                        step=0.001,
+                        value=float(market_fee.get("buy_commission_pct", 0.0) or 0.0),
+                    )
+                    sell_commission_pct = st.slider(
+                        f"{market_code} sell commission (%)",
+                        min_value=0.0,
+                        max_value=1.0,
+                        step=0.001,
+                        value=float(market_fee.get("sell_commission_pct", 0.0) or 0.0),
+                    )
+                    sell_tax_pct = st.slider(
+                        f"{market_code} sell tax (%)",
+                        min_value=0.0,
+                        max_value=5.0,
+                        step=0.001,
+                        value=float(market_fee.get("sell_tax_pct", 0.0) or 0.0),
+                    )
+                    sell_regulatory_fee_pct = st.slider(
+                        f"{market_code} regulatory fee (%)",
+                        min_value=0.0,
+                        max_value=0.1,
+                        step=0.0001,
+                        value=float(market_fee.get("sell_regulatory_fee_pct", 0.0) or 0.0),
+                    )
+                    if st.form_submit_button(f"Save {market_code} fee settings"):
+                        payload = {
+                            "buy_commission_pct": buy_commission_pct,
+                            "sell_commission_pct": sell_commission_pct,
+                            "sell_tax_pct": sell_tax_pct,
+                            "sell_regulatory_fee_pct": sell_regulatory_fee_pct,
+                        }
+                        if api_base_url:
+                            with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+                                client.put(f"/admin/market-fees/{market_code}", headers={"X-Admin-Token": current_admin_token}, json=payload).raise_for_status()
+                        else:
+                            with SessionLocal() as session:
+                                update_market_fee_settings(session, market_code=market_code, **payload)
+                                session.commit()
+                        refresh_all()
+                        st.rerun()
 
         st.markdown("**Manual actions**")
         action_cols = st.columns(2)

@@ -201,6 +201,23 @@ class RuntimeSecretsUpdate(BaseModel):
     marketaux_api_token: str | None = None
 
 
+class MarketFeeSettingSummary(BaseModel):
+    market_code: str
+    market_name: str
+    currency: str
+    buy_commission_pct: float
+    sell_commission_pct: float
+    sell_tax_pct: float
+    sell_regulatory_fee_pct: float
+
+
+class MarketFeeSettingUpdate(BaseModel):
+    buy_commission_pct: float | None = None
+    sell_commission_pct: float | None = None
+    sell_tax_pct: float | None = None
+    sell_regulatory_fee_pct: float | None = None
+
+
 class AdminActionResponse(BaseModel):
     messages: list[str]
 

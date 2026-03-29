@@ -529,6 +529,46 @@ def list_enabled_market_codes(session: Session) -> list[str]:
     return [code for code, config in runtime.get("markets", {}).items() if config.get("enabled", True)]
 
 
+def list_market_fee_settings(session: Session) -> list[dict]:
+    rows = session.scalars(select(MarketSetting).where(MarketSetting.enabled.is_(True)).order_by(MarketSetting.market_code.asc())).all()
+    return [
+        {
+            "market_code": row.market_code,
+            "market_name": row.market_name,
+            "currency": row.currency,
+            "buy_commission_pct": (row.buy_commission_rate or 0.0) * 100.0,
+            "sell_commission_pct": (row.sell_commission_rate or 0.0) * 100.0,
+            "sell_tax_pct": (row.sell_tax_rate or 0.0) * 100.0,
+            "sell_regulatory_fee_pct": (row.sell_regulatory_fee_rate or 0.0) * 100.0,
+        }
+        for row in rows
+    ]
+
+
+def update_market_fee_settings(
+    session: Session,
+    market_code: str,
+    *,
+    buy_commission_pct: float | None = None,
+    sell_commission_pct: float | None = None,
+    sell_tax_pct: float | None = None,
+    sell_regulatory_fee_pct: float | None = None,
+) -> MarketSetting:
+    market = session.scalar(select(MarketSetting).where(MarketSetting.market_code == market_code))
+    if market is None:
+        raise ValueError(f"Market setting not found for {market_code}")
+    if buy_commission_pct is not None:
+        market.buy_commission_rate = max(0.0, buy_commission_pct) / 100.0
+    if sell_commission_pct is not None:
+        market.sell_commission_rate = max(0.0, sell_commission_pct) / 100.0
+    if sell_tax_pct is not None:
+        market.sell_tax_rate = max(0.0, sell_tax_pct) / 100.0
+    if sell_regulatory_fee_pct is not None:
+        market.sell_regulatory_fee_rate = max(0.0, sell_regulatory_fee_pct) / 100.0
+    session.flush()
+    return market
+
+
 def run_manual_news_refreshes(session: Session, market_code: str | None = None) -> list[str]:
     from app.services.shared_news import refresh_shared_news_for_market
 

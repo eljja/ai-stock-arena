@@ -26,6 +26,8 @@ from app.api.schemas import (
     CopyTradeResponse,
     ExecutionEventSummary,
     HealthResponse,
+    MarketFeeSettingSummary,
+    MarketFeeSettingUpdate,
     LLMDecisionLogSummary,
     MarketInstrumentSummary,
     MarketPriceHistoryPoint,
@@ -54,10 +56,12 @@ from app.db.session import get_session
 from app.services.admin import (
     create_or_update_model_profile,
     delete_model_profile,
+    list_market_fee_settings,
     reset_simulation,
     run_manual_news_refreshes,
     run_manual_trade_cycles,
     set_model_selection,
+    update_market_fee_settings,
     update_model_runtime,
     update_runtime_settings,
 )
@@ -299,6 +303,34 @@ def update_settings(
     updated = update_runtime_settings(session=session, payload=payload.model_dump(exclude_none=True))
     session.commit()
     return RuntimeSettingsResponse(**updated)
+
+
+@app.get("/admin/market-fees", response_model=list[MarketFeeSettingSummary])
+def admin_market_fees(
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[MarketFeeSettingSummary]:
+    return [MarketFeeSettingSummary(**row) for row in list_market_fee_settings(session)]
+
+
+@app.put("/admin/market-fees/{market_code}", response_model=MarketFeeSettingSummary)
+def update_market_fees(
+    market_code: str,
+    payload: MarketFeeSettingUpdate,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> MarketFeeSettingSummary:
+    market = update_market_fee_settings(session=session, market_code=market_code.upper(), **payload.model_dump(exclude_none=True))
+    session.commit()
+    return MarketFeeSettingSummary(
+        market_code=market.market_code,
+        market_name=market.market_name,
+        currency=market.currency,
+        buy_commission_pct=(market.buy_commission_rate or 0.0) * 100.0,
+        sell_commission_pct=(market.sell_commission_rate or 0.0) * 100.0,
+        sell_tax_pct=(market.sell_tax_rate or 0.0) * 100.0,
+        sell_regulatory_fee_pct=(market.sell_regulatory_fee_rate or 0.0) * 100.0,
+    )
 
 
 @app.get("/admin/secrets", response_model=RuntimeSecretsResponse)
