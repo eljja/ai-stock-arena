@@ -822,15 +822,21 @@ if not chosen_models and model_options:
     chosen_models = default_models or model_options
     st.session_state["dashboard_models"] = chosen_models
 if chosen_models:
-    rankings_df = rankings_df[rankings_df["model_id"].isin(chosen_models)]
-    portfolios_df = portfolios_df[portfolios_df["model_id"].isin(chosen_models)]
-    positions_df = positions_df[positions_df["model_id"].isin(chosen_models)]
-    trades_df = trades_df[trades_df["model_id"].isin(chosen_models)]
-    snapshots_df = snapshots_df[snapshots_df["model_id"].isin(chosen_models)]
-    models_df = models_df[models_df["model_id"].isin(chosen_models)]
-    if not logs_all_df.empty:
+    if "model_id" in rankings_df.columns:
+        rankings_df = rankings_df[rankings_df["model_id"].isin(chosen_models)]
+    if "model_id" in portfolios_df.columns:
+        portfolios_df = portfolios_df[portfolios_df["model_id"].isin(chosen_models)]
+    if "model_id" in positions_df.columns:
+        positions_df = positions_df[positions_df["model_id"].isin(chosen_models)]
+    if "model_id" in trades_df.columns:
+        trades_df = trades_df[trades_df["model_id"].isin(chosen_models)]
+    if "model_id" in snapshots_df.columns:
+        snapshots_df = snapshots_df[snapshots_df["model_id"].isin(chosen_models)]
+    if "model_id" in models_df.columns:
+        models_df = models_df[models_df["model_id"].isin(chosen_models)]
+    if not logs_all_df.empty and "model_id" in logs_all_df.columns:
         logs_all_df = logs_all_df[logs_all_df["model_id"].isin(chosen_models)]
-    if not runs_df.empty:
+    if not runs_df.empty and "model_id" in runs_df.columns:
         runs_df = runs_df[runs_df["model_id"].isin(chosen_models)]
 
 render_hero(settings_payload, scheduler_payload, rankings_df, news_batches)
