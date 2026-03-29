@@ -226,6 +226,18 @@ def get_scheduler_status(session: Session, now: datetime | None = None) -> dict:
     }
 
 
+
+
+def _get_model_in_session(session: Session, profile_id: str) -> LLMModel | None:
+    for pending in session.new:
+        if isinstance(pending, LLMModel) and pending.model_id == profile_id:
+            return pending
+    for instance in session.identity_map.values():
+        if isinstance(instance, LLMModel) and instance.model_id == profile_id:
+            return instance
+    return session.scalar(select(LLMModel).where(LLMModel.model_id == profile_id))
+
+
 def reset_simulation(session: Session, reset_prompts: bool = True) -> dict[str, int]:
     deleted_logs = session.execute(delete(LLMDecisionLog)).rowcount or 0
     deleted_run_requests = session.execute(delete(RunRequest)).rowcount or 0
@@ -312,7 +324,7 @@ def create_or_update_model_profile(
     custom_prompt: str | None = None,
     api_enabled: bool = True,
 ) -> LLMModel:
-    model = session.scalar(select(LLMModel).where(LLMModel.model_id == profile_id))
+    model = _get_model_in_session(session, profile_id)
     if model is None:
         model = LLMModel(
             provider=provider,

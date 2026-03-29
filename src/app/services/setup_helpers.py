@@ -6,13 +6,25 @@ from sqlalchemy.orm import Session
 from app.db.models import LLMModel, MarketSetting, ModelMarketPrompt, Portfolio
 
 
+
+
+def _get_model_in_session(session: Session, model_id: str) -> LLMModel | None:
+    for pending in session.new:
+        if isinstance(pending, LLMModel) and pending.model_id == model_id:
+            return pending
+    for instance in session.identity_map.values():
+        if isinstance(instance, LLMModel) and instance.model_id == model_id:
+            return instance
+    return session.scalar(select(LLMModel).where(LLMModel.model_id == model_id))
+
+
 def ensure_model_market_state(
     session: Session,
     model_id: str,
     market_code: str,
     display_name: str | None = None,
 ) -> None:
-    model = session.scalar(select(LLMModel).where(LLMModel.model_id == model_id))
+    model = _get_model_in_session(session, model_id)
     if model is None:
         model = LLMModel(
             provider="manual",
