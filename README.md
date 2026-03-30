@@ -1,106 +1,113 @@
 # AI Stock Arena
 
-AI Stock Arena is a pure-model virtual trading benchmark for comparing how different LLMs make trading decisions under the same rules, the same hourly market context, and the same shared news feed.
+AI Stock Arena is a live LLM trading benchmark that compares how different models behave under the same market data, the same benchmark rules, and the same shared news context.
 
-## Live Deployment
+The project is currently in a free-model stabilization phase. The live public league is focused on OpenRouter free and experimental models first, and paid model profiles will be added after the benchmark flow is stable.
+
+## Live
 
 - Dashboard: [https://aistockarena.com](https://aistockarena.com)
 - API health: [https://aistockarena.com/api/health](https://aistockarena.com/api/health)
 - Scheduler status: [https://aistockarena.com/api/scheduler-status](https://aistockarena.com/api/scheduler-status)
 
-## Live Screenshot
+## Screenshots
 
-The image below is a live snapshot of the deployed site.
+### Live Snapshot
 
 ![AI Stock Arena live dashboard](https://image.thum.io/get/width/1600/crop/900/https://aistockarena.com)
 
-## Current Status
+### Full Page Still
 
-AI Stock Arena is currently running in a free-model stabilization phase.
+![AI Stock Arena full page still](https://image.thum.io/get/width/1600/https://aistockarena.com)
 
-- The live benchmark is currently focused on OpenRouter free models.
-- The system records performance, portfolio state, trades, run status, token usage, and estimated LLM overhead.
-- After the free-model league is stable, paid model profiles will be added and benchmarked under the same rules.
+### Dashboard Still
 
-## Benchmark Principles
+![AI Stock Arena dashboard still](https://image.thum.io/get/width/1400/crop/1200/https://aistockarena.com)
 
-- Pure model comparison first: all models receive the same screened candidates and the same shared news context.
-- Search-enabled variants are treated as separate profiles and should be compared in a different league.
-- Rankings are based on fee-adjusted return and risk metrics, not on combined multi-currency equity.
-- Trade costs and LLM token costs are both tracked as benchmark overhead.
-- News is shared benchmark context, not model-side browsing.
+## What It Does
 
-## What This Version Does
+- Runs virtual trading portfolios for multiple LLM profiles across KR and US markets.
+- Applies the same candidate universe, trade accounting rules, and shared-news inputs to every model in the same league.
+- Tracks positions, trades, portfolio equity, performance snapshots, token usage, and estimated LLM overhead.
+- Provides a public dashboard for rankings, performance, market pulse, shared news, and model drilldown.
+- Provides an admin surface for runtime controls, prompts, secrets, fees, provider settings, and manual refresh/run actions.
+- Automatically expands the free-model pool over time and can disable stale or paid free-like endpoints from the active benchmark set.
 
-- Compares multiple OpenRouter-backed LLM profiles on the same benchmark rules.
-- Uses unified `KR` and `US` portfolios instead of exchange-by-exchange league tables.
-- Runs hourly-style virtual trading with market-specific costs and persistent portfolio state.
-- Collects hourly market data for tracked instruments and stores historical snapshots.
-- Collects shared news batches and injects the same recent news context into every model.
-- Tracks LLM decisions, token usage, estimated LLM cost, trades, positions, and performance snapshots.
-- Provides a dark-mode Streamlit dashboard and a FastAPI service for operational control.
-- Supports admin-managed investment profiles, custom prompts, runtime windows, manual refresh actions, and secret management.
+## Benchmark Model
+
+AI Stock Arena is built around a few simple benchmark principles.
+
+- Every model should see the same market context.
+- Shared news is injected by the server, not fetched by individual models during a decision.
+- Search variants, prompt variants, and model variants can be treated as separate benchmark profiles.
+- Trade cost and LLM cost are both part of benchmark overhead.
+- Public rankings should be inspectable through both the UI and the API.
+
+## Current League Status
+
+The live system is still being hardened around free-model behavior.
+
+- Free and experimental OpenRouter models are the current benchmark focus.
+- Weekly free-model discovery is supported so newly available models can be added into the pool.
+- Models that remain inactive for multiple days can be marked out of active use.
+- Paid model benchmarking is planned after the free league is stable enough to compare consistently.
+
+## Shared News
+
+The benchmark uses a provider-based shared news feed.
+
+- Marketaux: 15-minute cadence, up to 3 items per pull
+- Naver News: 30-minute cadence, up to 5 items per pull
+- Alpha Vantage: 30-minute cadence, top 5 scored items per pull
+- News deduplication can be toggled from the admin panel while validating provider behavior
+
+The current goal is visibility and stability first: shared context is stored centrally and then reused by all participating models.
 
 ## Public API
 
-The deployment intentionally exposes read-only benchmark data so anyone can inspect rankings, holdings, and trade activity.
+The public deployment intentionally exposes read-only benchmark data so anyone can inspect what the models currently hold, what they have traded, and how they rank.
 
-### Public Endpoints
+### Public endpoints
 
 - `GET /api/health`
 - `GET /api/models?selected_only=true`
 - `GET /api/rankings?selected_only=true`
 - `GET /api/portfolios?selected_only=true`
-- `GET /api/positions?selected_only=true&market_code=US`
-- `GET /api/trades?selected_only=true&market_code=KR&limit=20`
+- `GET /api/positions?selected_only=true`
+- `GET /api/trades?selected_only=true&limit=20`
 - `GET /api/snapshots?selected_only=true&limit=200`
-- `GET /api/news?market_code=US&limit=5`
+- `GET /api/news?limit=5`
 - `GET /api/run-requests?selected_only=true&limit=50`
 - `GET /api/copy-trade/{model_id}?market_code=US`
 
-### Example Requests
+### Example requests
 
 ```bash
 curl https://aistockarena.com/api/health
 curl "https://aistockarena.com/api/rankings?selected_only=true"
-curl "https://aistockarena.com/api/positions?selected_only=true&market_code=US"
-curl "https://aistockarena.com/api/trades?selected_only=true&market_code=KR&limit=20"
+curl "https://aistockarena.com/api/positions?selected_only=true"
+curl "https://aistockarena.com/api/trades?selected_only=true&limit=20"
+curl "https://aistockarena.com/api/news?limit=5"
 curl "https://aistockarena.com/api/copy-trade/openrouter/free?market_code=US"
 ```
 
-### Copy-Trade Style Response
+### What the public API exposes
 
-`/api/copy-trade/{model_id}` returns:
-
-- current total equity
-- current cash weight
-- current positions
-- target weight by position
-- last action per ticker
-- recent trades
-
-This makes the live benchmark transparent and allows external consumers to follow what each model currently holds and has recently traded.
+- current rankings and score inputs
+- current portfolio equity and cash state
+- current holdings and recent trades
+- recent run status and execution flow
+- shared news batches used as benchmark context
 
 ## Stack
 
-- `FastAPI` for API and admin endpoints
-- `Streamlit` for the dashboard
+- `FastAPI` for the API and admin endpoints
+- `Streamlit` for the live dashboard
 - `SQLAlchemy` for persistence
-- `SQLite` for local development, PostgreSQL for the Oracle deployment
-- `yfinance` for prototype market data collection
+- `PostgreSQL` on Oracle Cloud for the public deployment
 - `OpenRouter` for model access
-- `Marketaux` for shared news collection
+- `Marketaux`, `Naver News`, and `Alpha Vantage` for shared news providers
 - `Oracle Cloud Free Tier` for the current public deployment
-
-## Repository Layout
-
-- [First release overview](docs/first-release-overview.md)
-- [Runtime and admin guide](docs/runtime-admin-guide.md)
-- [System specification](docs/step-01-system-spec.md)
-- [Local and GitHub workflow](docs/step-02-local-github-flow.md)
-- [Oracle deployment](docs/step-03-oracle-deployment.md)
-- [Default runtime config](config/defaults.toml)
-- [Environment example](.env.example)
 
 ## Local Setup
 
@@ -117,36 +124,13 @@ copy .env.example .env
 .\.venv\Scripts\python.exe -m app.cli.models list-models --sort-by price-low --free-mode only --limit 20
 .\.venv\Scripts\python.exe -m app.cli.models probe-free-models --target-count 10 --candidate-limit 20 --sort-by popular
 .\.venv\Scripts\python.exe -m app.cli.models add-free-models --additional-count 10 --candidate-limit 40 --sort-by popular
-.\.venv\Scripts\python.exe -m app.cli.market screen US --limit 5
-.\.venv\Scripts\python.exe -m app.cli.market collect-history US
-.\.venv\Scripts\python.exe -m app.cli.market collect-history KR
-.\.venv\Scripts\python.exe -m app.cli.news collect US
-.\.venv\Scripts\python.exe -m app.cli.news collect KR
-.\.venv\Scripts\python.exe -m app.cli.scheduler status
 .\.venv\Scripts\python.exe -m app.cli.scheduler run-once
 .\.venv\Scripts\python.exe -m app.cli.scheduler serve
 ```
 
-## Local Background Launchers
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-background-services.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\restart-background-services.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\status-background-services.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\stop-background-tasks.ps1
-```
-
-Default local URLs:
-
-- Dashboard: `http://127.0.0.1:8501`
-- API health: `http://127.0.0.1:8000/health`
-- Scheduler status: `http://127.0.0.1:8000/scheduler-status`
-
 ## Oracle Operations
 
-Initial Oracle deployment and updates are documented in [docs/step-03-oracle-deployment.md](docs/step-03-oracle-deployment.md).
-
-Typical update flow:
+Typical server update flow:
 
 ```bash
 cd /opt/ai-stock-arena/current
@@ -160,33 +144,20 @@ cd /opt/ai-stock-arena/current
 bash scripts/linux/add-free-models.sh 10 40 popular
 ```
 
-## Configuration Notes
+## Repository Guide
 
-- LLM-facing prompts and payloads are written in English.
-- The live Oracle deployment uses PostgreSQL.
-- Oracle should run with the `live_strict` news collection policy.
-- Runtime secrets can be updated from the admin panel and are persisted separately from `.env` defaults.
-- Shared news currently runs on a 30-minute cadence.
-- `Marketaux` news is benchmark context, not model-specific web search.
+- [First release overview](docs/first-release-overview.md)
+- [Runtime and admin guide](docs/runtime-admin-guide.md)
+- [System specification](docs/step-01-system-spec.md)
+- [Local and GitHub workflow](docs/step-02-local-github-flow.md)
+- [Oracle deployment](docs/step-03-oracle-deployment.md)
+- [Default runtime config](config/defaults.toml)
+- [Environment example](.env.example)
 
-## First Release Scope
-
-This repository now contains the first end-to-end working version of AI Stock Arena:
-
-- benchmark data model
-- hourly market snapshot pipeline
-- shared-news pipeline
-- LLM decision logging
-- virtual trading engine
-- ranking-first dashboard
-- local background launchers
-- Oracle deployment assets
-- public benchmark API
-
-## Next Major Work
+## Next
 
 - stabilize the free-model league further
-- add paid-model benchmark profiles after the free league is stable
-- broaden KR and US instrument universe coverage
-- improve KR-specific news source quality
-- refine production monitoring and operations on Oracle Cloud
+- improve provider scoring and shared-news quality
+- broaden KR and US market coverage
+- add paid-model benchmark profiles under the same benchmark rules
+- keep the public API and dashboard transparent as the league grows
