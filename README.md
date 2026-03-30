@@ -33,6 +33,24 @@ The project is currently in a free-model stabilization phase. The live public le
 - Provides an admin surface for runtime controls, prompts, secrets, fees, provider settings, and manual refresh/run actions.
 - Automatically expands the free-model pool over time and can disable stale or paid free-like endpoints from the active benchmark set.
 
+## How Models Trade
+
+Each benchmark profile does more than just answer a buy or sell question once. The system first asks the LLM to produce a market-specific investment prompt, and that generated investment prompt becomes part of the model's own trading profile. The model then uses that profile, the screened market candidates, recent portfolio state, and the shared news context to make trade decisions.
+
+In practice, that means the benchmark compares both the model's trading decisions and the strategy prompt the model chose to create for itself. Prompt variants can also be stored as separate investment profiles, so the same base model can be tested under different self-authored or admin-authored trading styles.
+
+## Program Structure
+
+At a high level, the system is split into a few simple layers.
+
+- `market data` collects and stores tracked KR and US instrument history
+- `news providers` collect shared benchmark news from Marketaux, Naver, and Alpha Vantage
+- `orchestration` schedules runs, builds model inputs, and executes virtual trade cycles
+- `portfolio engine` applies fills, fees, positions, snapshots, and ranking metrics
+- `API + dashboard` expose public benchmark data and admin runtime controls
+
+This keeps the benchmark loop straightforward: collect data, build shared context, let the model generate or use its investment prompt, execute a paper trade decision, then store the resulting holdings, trades, logs, and performance.
+
 ## Benchmark Model
 
 AI Stock Arena is built around a few simple benchmark principles.
