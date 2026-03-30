@@ -478,7 +478,7 @@ def inject_styles() -> None:
             background: linear-gradient(180deg, rgba(9, 18, 33, 0.88), rgba(13, 27, 45, 0.8));
             border: 1px solid rgba(148, 163, 184, 0.16);
             border-radius: 18px;
-            min-height: 228px;
+            min-height: 276px;
         }
         .asa-news-meta {
             display: flex;
@@ -496,7 +496,7 @@ def inject_styles() -> None:
             font-size: 0.82rem;
         }
         .asa-news-list {
-            max-height: 182px;
+            max-height: 230px;
             overflow-y: auto;
             display: grid;
             grid-template-columns: minmax(0, 1fr);
@@ -730,7 +730,25 @@ def _adaptive_bottom_legend(*, label_limit: int = 220, symbol_limit: int | None 
     return alt.Legend(**legend_kwargs)
 
 
-def _aggregate_all_market_snapshots(chart_df: pd.DataFrame) -> pd.DataFrame:
+def _normalize_fx_rates(raw_rates: dict | None) -> dict[str, float]:
+    rates = {"USDKRW": 1500.0}
+    if isinstance(raw_rates, dict):
+        for key, value in raw_rates.items():
+            try:
+                rates[str(key).upper()] = float(value)
+            except (TypeError, ValueError):
+                continue
+    if rates["USDKRW"] <= 0:
+        rates["USDKRW"] = 1500.0
+    return rates
+
+
+def _market_fx_rate(market_code: str, fx_rates: dict[str, float] | None) -> float:
+    rates = _normalize_fx_rates(fx_rates)
+    return rates["USDKRW"] if str(market_code).upper() == "US" else 1.0
+
+
+def _aggregate_all_market_snapshots(chart_df: pd.DataFrame, fx_rates: dict[str, float] | None = None) -> pd.DataFrame:
     required = {"model_id", "market_code", "created_at", "total_equity", "total_return_pct"}
     if chart_df.empty or not required.issubset(chart_df.columns):
         return chart_df
@@ -740,22 +758,25 @@ def _aggregate_all_market_snapshots(chart_df: pd.DataFrame) -> pd.DataFrame:
     work = work.dropna(subset=["created_at", "total_equity"])
     if work.empty:
         return work
+    work["fx_rate"] = work["market_code"].map(lambda market: _market_fx_rate(market, fx_rates))
+    work["total_equity_krw"] = work["total_equity"] * work["fx_rate"]
     baselines = (
         work.sort_values("created_at")
         .groupby(["model_id", "market_code"], as_index=False)
-        .first()[["model_id", "market_code", "total_equity"]]
+        .first()[["model_id", "market_code", "total_equity_krw"]]
     )
-    baseline_map = baselines.groupby("model_id")["total_equity"].sum().to_dict()
+    baseline_map = baselines.groupby("model_id")["total_equity_krw"].sum().to_dict()
     work["bucket"] = work["created_at"].dt.floor("h")
     latest = work.sort_values("created_at").groupby(["model_id", "market_code", "bucket"], as_index=False).tail(1)
-    combined = latest.groupby(["model_id", "bucket"], as_index=False)["total_equity"].sum()
+    combined = latest.groupby(["model_id", "bucket"], as_index=False)["total_equity_krw"].sum()
     combined["baseline_equity"] = combined["model_id"].map(baseline_map).fillna(0.0)
     combined["total_return_pct"] = combined.apply(
-        lambda row: ((row["total_equity"] / row["baseline_equity"]) - 1.0) * 100.0 if row["baseline_equity"] else 0.0,
+        lambda row: ((row["total_equity_krw"] / row["baseline_equity"]) - 1.0) * 100.0 if row["baseline_equity"] else 0.0,
         axis=1,
     )
     combined["market_code"] = "All"
     combined["created_at"] = combined["bucket"]
+    combined = combined.rename(columns={"total_equity_krw": "total_equity"})
     return combined[["model_id", "market_code", "created_at", "total_return_pct", "total_equity"]]
 
 
@@ -796,14 +817,17 @@ def _apply_chart_theme(chart):
     )
 
 
-def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models: list[str], *, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart:
+def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models: list[str], *, market_filter: str = "All", x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart:
     model_count = max(len(chart_df["model_id"].dropna().unique()), 1)
     color_scale = _model_color_scale(selected_models or chart_df["model_id"].dropna().tolist())
     selection = legend_selection or _legend_highlight_selection("model_id")
     y_domain = _padded_domain(chart_df[metric_name])
+    y_title = metric_name.replace("_", " ").title()
+    if metric_name == "total_equity" and market_filter == "All":
+        y_title = "Total Equity (KRW equiv.)"
     base = alt.Chart(chart_df).encode(
         x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
-        y=alt.Y(f"{metric_name}:Q", title=metric_name.replace("_", " ").title(), scale=alt.Scale(domain=y_domain, zero=False)),
+        y=alt.Y(f"{metric_name}:Q", title=y_title, scale=alt.Scale(domain=y_domain, zero=False)),
         color=alt.Color(
             "model_id:N",
             legend=None,
@@ -828,7 +852,7 @@ def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models:
     return chart
 
 
-def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
+def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, fx_rates: dict[str, float] | None = None, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
     required = {"model_id", "market_code", "created_at", "side", "gross_amount"}
     if trades_df.empty or not required.issubset(trades_df.columns):
         return None
@@ -842,6 +866,9 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
 
     trades = filtered_trades.copy()
     trades["created_at"] = pd.to_datetime(trades["created_at"])
+    trades["gross_amount"] = pd.to_numeric(trades["gross_amount"], errors="coerce").fillna(0.0)
+    if market_filter == "All":
+        trades["gross_amount"] = trades["gross_amount"] * trades["market_code"].map(lambda market: _market_fx_rate(market, fx_rates))
     trades["bucket"] = trades["created_at"].dt.floor("h")
     grouped = trades.groupby(["bucket", "model_id", "side"], as_index=False)["gross_amount"].sum()
     grouped["metric"] = grouped["side"].map({"BUY": "Buy", "SELL": "Sell"}).fillna(grouped["side"])
@@ -855,7 +882,7 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
         .mark_line(point=True, strokeWidth=2.2, interpolate="linear")
         .encode(
             x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
-            y=alt.Y("value:Q", title="Buy / sell notional", scale=alt.Scale(domain=y_domain, zero=False)),
+            y=alt.Y("value:Q", title=("Buy / sell notional (KRW equiv.)" if market_filter == "All" else "Buy / sell notional"), scale=alt.Scale(domain=y_domain, zero=False)),
             color=alt.Color("model_id:N", scale=color_scale, legend=None),
             strokeDash=alt.StrokeDash("metric:N", legend=None, sort=["Buy", "Sell"]),
             opacity=line_opacity,
@@ -873,7 +900,7 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
     return chart
 
 
-def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
+def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, fx_rates: dict[str, float] | None = None, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
     trade_required = {"model_id", "market_code", "created_at", "commission_amount", "tax_amount", "regulatory_fee_amount"}
     log_required = {"model_id", "market_code", "created_at", "estimated_cost_usd"}
     frames: list[pd.DataFrame] = []
@@ -891,8 +918,11 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
     if not filtered_trades.empty:
         trades = filtered_trades.copy()
         trades["created_at"] = pd.to_datetime(trades["created_at"])
+        trades[["commission_amount", "tax_amount", "regulatory_fee_amount"]] = trades[["commission_amount", "tax_amount", "regulatory_fee_amount"]].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+        trades["trade_overhead"] = trades[["commission_amount", "tax_amount", "regulatory_fee_amount"]].sum(axis=1)
+        if market_filter == "All":
+            trades["trade_overhead"] = trades["trade_overhead"] * trades["market_code"].map(lambda market: _market_fx_rate(market, fx_rates))
         trades["bucket"] = trades["created_at"].dt.floor("h")
-        trades["trade_overhead"] = trades[["commission_amount", "tax_amount", "regulatory_fee_amount"]].fillna(0).sum(axis=1)
         fees = trades.groupby(["bucket", "model_id"], as_index=False)["trade_overhead"].sum()
         fees["metric"] = "Trade overhead"
         fees = fees.rename(columns={"bucket": "created_at", "trade_overhead": "value"})[["created_at", "model_id", "metric", "value"]]
@@ -901,7 +931,9 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
         logs = filtered_logs.copy()
         logs["created_at"] = pd.to_datetime(logs["created_at"])
         logs["bucket"] = logs["created_at"].dt.floor("h")
-        logs["estimated_cost_usd"] = pd.to_numeric(logs["estimated_cost_usd"], errors="coerce").fillna(0)
+        logs["estimated_cost_usd"] = pd.to_numeric(logs["estimated_cost_usd"], errors="coerce").fillna(0.0)
+        if market_filter == "All":
+            logs["estimated_cost_usd"] = logs["estimated_cost_usd"] * _market_fx_rate("US", fx_rates)
         token_cost = logs.groupby(["bucket", "model_id"], as_index=False)["estimated_cost_usd"].sum()
         token_cost["metric"] = "LLM overhead"
         token_cost = token_cost.rename(columns={"bucket": "created_at", "estimated_cost_usd": "value"})[["created_at", "model_id", "metric", "value"]]
@@ -918,7 +950,7 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
         .mark_line(point=True, strokeWidth=2.2, interpolate="linear")
         .encode(
             x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
-            y=alt.Y("value:Q", title="Overhead", scale=alt.Scale(domain=y_domain, zero=False)),
+            y=alt.Y("value:Q", title=("Overhead (KRW equiv.)" if market_filter == "All" else "Overhead"), scale=alt.Scale(domain=y_domain, zero=False)),
             color=alt.Color("model_id:N", scale=color_scale, legend=None),
             strokeDash=alt.StrokeDash("metric:N", legend=None, sort=["Trade overhead", "LLM overhead"]),
             opacity=line_opacity,
@@ -1017,6 +1049,7 @@ settings_payload = payload["settings"] or {
     "news_mode": "shared_off",
     "news_collection_policy": "development_fallback",
     "news_refresh_interval_minutes": 30,
+    "fx_rates": {"USDKRW": 1500.0},
 }
 scheduler_payload = payload.get("scheduler") or {"markets": []}
 market_windows = settings_payload.get("markets", {})
@@ -1155,10 +1188,11 @@ with performance_tab:
         st.info("No performance snapshots found.")
     else:
         chart_df = snapshots_df.copy()
+        fx_rates = _normalize_fx_rates(settings_payload.get("fx_rates"))
         if performance_market != "All":
             chart_df = chart_df[chart_df["market_code"] == performance_market]
         else:
-            chart_df = _aggregate_all_market_snapshots(chart_df)
+            chart_df = _aggregate_all_market_snapshots(chart_df, fx_rates)
         if performance_models:
             chart_df = chart_df[chart_df["model_id"].isin(performance_models)]
         if chart_df.empty:
@@ -1166,12 +1200,12 @@ with performance_tab:
         else:
             chart_df["created_at"] = pd.to_datetime(chart_df["created_at"])
             x_zoom = alt.selection_interval(encodings=["x"], bind="scales")
-            charts = [performance_chart(chart_df, metric_name, performance_models, x_zoom=x_zoom, legend_selection=None)]
-            buy_sell = buy_sell_chart(trades_df, performance_market, performance_models, x_zoom=x_zoom, legend_selection=None)
+            charts = [performance_chart(chart_df, metric_name, performance_models, market_filter=performance_market, x_zoom=x_zoom, legend_selection=None)]
+            buy_sell = buy_sell_chart(trades_df, performance_market, performance_models, fx_rates=fx_rates, x_zoom=x_zoom, legend_selection=None)
             if buy_sell is not None:
                 st.markdown("**Buy / Sell:** Solid line = Buy, dashed line = Sell.")
                 charts.append(buy_sell)
-            overhead = overhead_chart(trades_df, logs_all_df, performance_market, performance_models, x_zoom=x_zoom, legend_selection=None)
+            overhead = overhead_chart(trades_df, logs_all_df, performance_market, performance_models, fx_rates=fx_rates, x_zoom=x_zoom, legend_selection=None)
             if overhead is not None:
                 st.markdown("**Overhead:** Solid line = Trade overhead, dashed line = LLM overhead.")
                 charts.append(overhead)
@@ -1387,10 +1421,11 @@ with admin_tab:
         )
         admin_secrets = load_admin_secrets(api_base_url or None, current_admin_token)
         news_provider_flags = {**{"marketaux": True, "naver": True, "alpha_vantage": True}, **(settings_payload.get("news_providers", {}) or {})}
-        runtime_cols = st.columns([1.2, 1.2, 1.6])
+        runtime_cols = st.columns([1.05, 1.05, 1.35, 0.9])
         runtime_cols[0].metric("Trade cadence", f"{int(settings_payload.get('decision_interval_minutes', 60))} min")
         runtime_cols[1].metric("News refresh cadence", f"{int(settings_payload.get('news_refresh_interval_minutes', 30))} min")
         runtime_cols[2].metric("News policy", str(settings_payload.get("news_collection_policy", "development_fallback")))
+        runtime_cols[3].metric("USD/KRW", f"{_normalize_fx_rates(settings_payload.get('fx_rates')).get('USDKRW', 1500.0):,.0f}")
 
         market_state_map = {
             row.get("market_code"): row
@@ -1438,6 +1473,14 @@ with admin_tab:
                 step=1,
                 value=int(settings_payload.get("news_refresh_interval_minutes", 30)),
             )
+            usdkrw_rate = st.number_input(
+                "USD/KRW FX rate",
+                min_value=500.0,
+                max_value=3000.0,
+                step=10.0,
+                value=float(_normalize_fx_rates(settings_payload.get("fx_rates")).get("USDKRW", 1500.0)),
+                help="Used to combine KR and US performance into a single KRW-equivalent view when Performance market is All.",
+            )
             weekday_defaults = settings_payload.get("active_weekdays", [0, 1, 2, 3, 4])
             active_weekdays = st.multiselect(
                 "Active weekdays",
@@ -1476,6 +1519,7 @@ with admin_tab:
                         "naver": news_provider_naver,
                         "alpha_vantage": news_provider_alpha,
                     },
+                    "fx_rates": {"USDKRW": float(usdkrw_rate)},
                     "markets": {
                         "KR": {
                             "enabled": True,

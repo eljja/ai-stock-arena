@@ -43,6 +43,7 @@ DEFAULT_RUNTIME_SETTINGS = {
     "news_collection_policy": "development_fallback",
     "news_refresh_interval_minutes": 30,
     "news_providers": {"marketaux": True, "naver": True, "alpha_vantage": True},
+    "fx_rates": {"USDKRW": 1500.0},
 }
 
 DEFAULT_SCHEDULER_ENTRY = {
@@ -80,6 +81,8 @@ def get_runtime_settings(session: Session) -> dict:
     value["news_collection_policy"] = value.get("news_collection_policy") or default_news_collection_policy()
     value["news_mode"] = _derive_news_mode(bool(value.get("news_enabled", False)), int(value.get("news_refresh_interval_minutes") or 30))
     value["news_providers"] = {**DEFAULT_RUNTIME_SETTINGS.get("news_providers", {}), **(value.get("news_providers", {}))}
+    value["fx_rates"] = {**DEFAULT_RUNTIME_SETTINGS.get("fx_rates", {}), **(value.get("fx_rates", {}))}
+    value["fx_rates"]["USDKRW"] = float(value["fx_rates"].get("USDKRW") or 1500.0)
     markets = {**DEFAULT_RUNTIME_SETTINGS.get("markets", {}), **(value.get("markets", {}))}
     changed = False
     us_window = markets.get("US", {})
@@ -107,6 +110,10 @@ def update_runtime_settings(session: Session, payload: dict) -> dict:
     merged["news_mode"] = _derive_news_mode(bool(merged.get("news_enabled", False)), int(merged.get("news_refresh_interval_minutes") or 30))
     if "news_providers" in payload:
         merged["news_providers"] = {**current.get("news_providers", {}), **payload["news_providers"]}
+    if "fx_rates" in payload:
+        merged["fx_rates"] = {**current.get("fx_rates", {}), **payload["fx_rates"]}
+    merged["fx_rates"] = {**DEFAULT_RUNTIME_SETTINGS.get("fx_rates", {}), **merged.get("fx_rates", {})}
+    merged["fx_rates"]["USDKRW"] = float(merged["fx_rates"].get("USDKRW") or 1500.0)
     if "markets" in payload:
         merged["markets"] = {**current.get("markets", {}), **payload["markets"]}
     setting = session.scalar(select(AdminSetting).where(AdminSetting.key == RUNTIME_SETTINGS_KEY))

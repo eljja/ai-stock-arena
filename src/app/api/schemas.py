@@ -146,6 +146,7 @@ class RuntimeSettingsResponse(BaseModel):
     news_collection_policy: str
     news_refresh_interval_minutes: int
     news_providers: dict[str, bool]
+    fx_rates: dict[str, float]
 
 
 class MarketSchedulerStatus(BaseModel):
@@ -183,6 +184,7 @@ class RuntimeSettingsUpdate(BaseModel):
     news_collection_policy: str | None = None
     news_refresh_interval_minutes: int | None = None
     news_providers: dict[str, bool] | None = None
+    fx_rates: dict[str, float] | None = None
 
 
 class ResetResponse(BaseModel):
