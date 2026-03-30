@@ -147,6 +147,8 @@ class RuntimeSettingsResponse(BaseModel):
     news_refresh_interval_minutes: int
     news_providers: dict[str, bool]
     news_dedup_enabled: bool
+    dashboard_auto_refresh_enabled: bool
+    dashboard_auto_refresh_minutes: int
     fx_rates: dict[str, float]
 
 
@@ -186,6 +188,8 @@ class RuntimeSettingsUpdate(BaseModel):
     news_refresh_interval_minutes: int | None = None
     news_providers: dict[str, bool] | None = None
     news_dedup_enabled: bool | None = None
+    dashboard_auto_refresh_enabled: bool | None = None
+    dashboard_auto_refresh_minutes: int | None = None
     fx_rates: dict[str, float] | None = None
 
 

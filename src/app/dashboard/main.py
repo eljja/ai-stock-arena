@@ -1036,14 +1036,8 @@ if "dashboard_admin_token" not in st.session_state:
     st.session_state["dashboard_admin_token"] = ""
 if "dashboard_models" not in st.session_state:
     st.session_state["dashboard_models"] = []
-if "dashboard_auto_refresh" not in st.session_state:
-    st.session_state["dashboard_auto_refresh"] = True
 if "dashboard_execution_event_limit" not in st.session_state:
     st.session_state["dashboard_execution_event_limit"] = 30
-
-auto_refresh_enabled = bool(st.session_state.get("dashboard_auto_refresh", False))
-if auto_refresh_enabled:
-    components.html("<script>setTimeout(function(){ window.parent.location.reload(); }, 300000);</script>", height=0, width=0)
 
 api_base_url = str(st.session_state.get("dashboard_api_base_url", ""))
 selected_only = bool(st.session_state.get("dashboard_selected_only", True))
@@ -1063,10 +1057,16 @@ settings_payload = payload["settings"] or {
     "news_mode": "shared_off",
     "news_refresh_interval_minutes": 30,
     "news_dedup_enabled": False,
+    "dashboard_auto_refresh_enabled": True,
+    "dashboard_auto_refresh_minutes": 15,
     "fx_rates": {"USDKRW": 1500.0},
 }
 scheduler_payload = payload.get("scheduler") or {"markets": []}
 market_windows = settings_payload.get("markets", {})
+auto_refresh_enabled = bool(settings_payload.get("dashboard_auto_refresh_enabled", True))
+auto_refresh_minutes = max(5, min(60, int(settings_payload.get("dashboard_auto_refresh_minutes", 15) or 15)))
+if auto_refresh_enabled:
+    components.html(f"<script>setTimeout(function(){{ window.parent.location.reload(); }}, {auto_refresh_minutes * 60 * 1000});</script>", height=0, width=0)
 
 models_df = _frame_with_columns(payload["models"], ["model_id", "display_name", "is_selected", "api_enabled"])
 rankings_df = _frame_with_columns(payload["rankings"], ["model_id", "display_name", "current_return_pct", "kr_return_pct", "us_return_pct", "trade_count", "llm_cost_usd", "pricing_label"])
@@ -1421,7 +1421,6 @@ with admin_tab:
     else:
         st.text_input("FastAPI base URL", key="dashboard_api_base_url", placeholder="http://127.0.0.1:8000")
         st.checkbox("Selected models only", key="dashboard_selected_only")
-        st.toggle("Auto refresh every 5 minutes", key="dashboard_auto_refresh")
         st.success("Admin mode enabled")
         for message in st.session_state.pop("admin_action_messages", []):
             st.info(message)
@@ -1433,11 +1432,12 @@ with admin_tab:
         )
         admin_secrets = load_admin_secrets(api_base_url or None, current_admin_token)
         news_provider_flags = {**{"marketaux": True, "naver": True, "alpha_vantage": True}, **(settings_payload.get("news_providers", {}) or {})}
-        runtime_cols = st.columns([1.05, 1.05, 0.85, 0.9])
+        runtime_cols = st.columns([1.0, 1.0, 1.1, 0.85, 0.9])
         runtime_cols[0].metric("Trade cadence", f"{int(settings_payload.get('decision_interval_minutes', 60))} min")
         runtime_cols[1].metric("News refresh cadence", f"{int(settings_payload.get('news_refresh_interval_minutes', 30))} min")
-        runtime_cols[2].metric("News dedupe", "ON" if bool(settings_payload.get("news_dedup_enabled", False)) else "OFF")
-        runtime_cols[3].metric("USD/KRW", f"{_normalize_fx_rates(settings_payload.get('fx_rates')).get('USDKRW', 1500.0):,.0f}")
+        runtime_cols[2].metric("Auto refresh", f"{auto_refresh_minutes} min" if auto_refresh_enabled else "OFF")
+        runtime_cols[3].metric("News dedupe", "ON" if bool(settings_payload.get("news_dedup_enabled", False)) else "OFF")
+        runtime_cols[4].metric("USD/KRW", f"{_normalize_fx_rates(settings_payload.get('fx_rates')).get('USDKRW', 1500.0):,.0f}")
 
         def provider_row(provider_key: str, label: str, cadence_label: str, secret_keys: list[str], event_code: str) -> dict:
             provider_events = execution_events_df.copy()
@@ -1478,6 +1478,18 @@ with admin_tab:
                 step=1,
                 value=int(settings_payload.get("news_refresh_interval_minutes", 30)),
             )
+            dashboard_auto_refresh_enabled = st.checkbox(
+                "Enable dashboard auto refresh for all users",
+                value=bool(settings_payload.get("dashboard_auto_refresh_enabled", True)),
+            )
+            dashboard_auto_refresh_minutes = st.slider(
+                "Dashboard auto refresh interval (minutes)",
+                min_value=5,
+                max_value=60,
+                step=1,
+                value=max(5, min(60, int(settings_payload.get("dashboard_auto_refresh_minutes", 15) or 15))),
+                help="Controls full-page auto reload cadence for every user viewing the dashboard.",
+            )
             usdkrw_rate = st.number_input(
                 "USD/KRW FX rate",
                 min_value=500.0,
@@ -1513,6 +1525,8 @@ with admin_tab:
                     "active_weekdays": sorted(active_weekdays),
                     "news_enabled": news_enabled,
                     "news_refresh_interval_minutes": news_refresh_interval,
+                    "dashboard_auto_refresh_enabled": dashboard_auto_refresh_enabled,
+                    "dashboard_auto_refresh_minutes": dashboard_auto_refresh_minutes,
                     "news_providers": {
                         "marketaux": news_provider_marketaux,
                         "naver": news_provider_naver,

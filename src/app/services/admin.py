@@ -44,6 +44,8 @@ DEFAULT_RUNTIME_SETTINGS = {
     "news_refresh_interval_minutes": 30,
     "news_providers": {"marketaux": True, "naver": True, "alpha_vantage": True},
     "news_dedup_enabled": False,
+    "dashboard_auto_refresh_enabled": True,
+    "dashboard_auto_refresh_minutes": 15,
     "fx_rates": {"USDKRW": 1500.0},
 }
 
@@ -83,6 +85,8 @@ def get_runtime_settings(session: Session) -> dict:
     value["news_mode"] = _derive_news_mode(bool(value.get("news_enabled", False)), int(value.get("news_refresh_interval_minutes") or 30))
     value["news_providers"] = {**DEFAULT_RUNTIME_SETTINGS.get("news_providers", {}), **(value.get("news_providers", {}))}
     value["news_dedup_enabled"] = bool(value.get("news_dedup_enabled", DEFAULT_RUNTIME_SETTINGS.get("news_dedup_enabled", False)))
+    value["dashboard_auto_refresh_enabled"] = bool(value.get("dashboard_auto_refresh_enabled", DEFAULT_RUNTIME_SETTINGS.get("dashboard_auto_refresh_enabled", True)))
+    value["dashboard_auto_refresh_minutes"] = max(5, min(60, int(value.get("dashboard_auto_refresh_minutes") or DEFAULT_RUNTIME_SETTINGS.get("dashboard_auto_refresh_minutes", 15))))
     value["fx_rates"] = {**DEFAULT_RUNTIME_SETTINGS.get("fx_rates", {}), **(value.get("fx_rates", {}))}
     value["fx_rates"]["USDKRW"] = float(value["fx_rates"].get("USDKRW") or 1500.0)
     markets = {**DEFAULT_RUNTIME_SETTINGS.get("markets", {}), **(value.get("markets", {}))}
@@ -113,6 +117,8 @@ def update_runtime_settings(session: Session, payload: dict) -> dict:
     if "news_providers" in payload:
         merged["news_providers"] = {**current.get("news_providers", {}), **payload["news_providers"]}
     merged["news_dedup_enabled"] = bool(merged.get("news_dedup_enabled", DEFAULT_RUNTIME_SETTINGS.get("news_dedup_enabled", False)))
+    merged["dashboard_auto_refresh_enabled"] = bool(merged.get("dashboard_auto_refresh_enabled", DEFAULT_RUNTIME_SETTINGS.get("dashboard_auto_refresh_enabled", True)))
+    merged["dashboard_auto_refresh_minutes"] = max(5, min(60, int(merged.get("dashboard_auto_refresh_minutes") or DEFAULT_RUNTIME_SETTINGS.get("dashboard_auto_refresh_minutes", 15))))
     if "fx_rates" in payload:
         merged["fx_rates"] = {**current.get("fx_rates", {}), **payload["fx_rates"]}
     merged["fx_rates"] = {**DEFAULT_RUNTIME_SETTINGS.get("fx_rates", {}), **merged.get("fx_rates", {})}
