@@ -622,7 +622,7 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
         leader_name = html.escape(str(leader.get("display_name") or leader.get("model_id")))
         leader_return = _pct(leader.get("current_return_pct"))
     refresh_minutes = int(settings_payload.get("news_refresh_interval_minutes", 30) or 30)
-    news_mode = "OFF" if not settings_payload.get("news_enabled", False) else f"HYBRID {refresh_minutes}M"
+    news_mode = "OFF" if not settings_payload.get("news_enabled", False) else "PROVIDERS 15M/30M"
     news_policy = str(settings_payload.get("news_collection_policy", "development_fallback")).replace("_", " ").title()
     news_rows = _news_preview_rows(news_batches, limit=20)
     current_utc = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC")
@@ -728,6 +728,35 @@ def _adaptive_bottom_legend(*, label_limit: int = 220, symbol_limit: int | None 
     if symbol_limit is not None:
         legend_kwargs["symbolLimit"] = symbol_limit
     return alt.Legend(**legend_kwargs)
+
+
+def _aggregate_all_market_snapshots(chart_df: pd.DataFrame) -> pd.DataFrame:
+    required = {"model_id", "market_code", "created_at", "total_equity", "total_return_pct"}
+    if chart_df.empty or not required.issubset(chart_df.columns):
+        return chart_df
+    work = chart_df.copy()
+    work["created_at"] = pd.to_datetime(work["created_at"], errors="coerce")
+    work["total_equity"] = pd.to_numeric(work["total_equity"], errors="coerce")
+    work = work.dropna(subset=["created_at", "total_equity"])
+    if work.empty:
+        return work
+    baselines = (
+        work.sort_values("created_at")
+        .groupby(["model_id", "market_code"], as_index=False)
+        .first()[["model_id", "market_code", "total_equity"]]
+    )
+    baseline_map = baselines.groupby("model_id")["total_equity"].sum().to_dict()
+    work["bucket"] = work["created_at"].dt.floor("h")
+    latest = work.sort_values("created_at").groupby(["model_id", "market_code", "bucket"], as_index=False).tail(1)
+    combined = latest.groupby(["model_id", "bucket"], as_index=False)["total_equity"].sum()
+    combined["baseline_equity"] = combined["model_id"].map(baseline_map).fillna(0.0)
+    combined["total_return_pct"] = combined.apply(
+        lambda row: ((row["total_equity"] / row["baseline_equity"]) - 1.0) * 100.0 if row["baseline_equity"] else 0.0,
+        axis=1,
+    )
+    combined["market_code"] = "All"
+    combined["created_at"] = combined["bucket"]
+    return combined[["model_id", "market_code", "created_at", "total_return_pct", "total_equity"]]
 
 
 def _padded_domain(values: pd.Series, pad_ratio: float = 0.05) -> list[float] | None:
@@ -1128,6 +1157,8 @@ with performance_tab:
         chart_df = snapshots_df.copy()
         if performance_market != "All":
             chart_df = chart_df[chart_df["market_code"] == performance_market]
+        else:
+            chart_df = _aggregate_all_market_snapshots(chart_df)
         if performance_models:
             chart_df = chart_df[chart_df["model_id"].isin(performance_models)]
         if chart_df.empty:
@@ -1366,27 +1397,29 @@ with admin_tab:
             for _, row in scheduler_admin_df.iterrows()
         } if not scheduler_admin_df.empty else {}
 
-        def provider_row(provider_key: str, label: str, scope: str, status_market_codes: list[str], secret_keys: list[str]) -> dict:
-            relevant_rows = [market_state_map.get(code) for code in status_market_codes if market_state_map.get(code) is not None]
-            completed_values = [row.get("news_last_completed_at") for row in relevant_rows if row.get("news_last_completed_at")]
-            last_completed = max(completed_values) if completed_values else ""
-            statuses = [str(row.get("news_last_status") or "") for row in relevant_rows if row.get("news_last_status")]
-            messages = [str(row.get("news_last_message") or "") for row in relevant_rows if row.get("news_last_message")]
+        def provider_row(provider_key: str, label: str, cadence_label: str, status_market_codes: list[str], secret_keys: list[str], event_code: str) -> dict:
+            provider_events = execution_events_df.copy()
+            if not provider_events.empty:
+                provider_events = provider_events[(provider_events["event_type"] == "news") & (provider_events["code"] == event_code)]
+                if status_market_codes:
+                    provider_events = provider_events[provider_events["market_code"].isin(status_market_codes)]
+                provider_events = provider_events.sort_values("created_at", ascending=False)
+            latest_event = provider_events.iloc[0] if not provider_events.empty else None
             return {
                 "Provider": label,
-                "Scope": scope,
+                "Cadence": cadence_label,
                 "Enabled": bool(news_provider_flags.get(provider_key, True)),
                 "Configured": all(bool(admin_secrets.get(key)) for key in secret_keys),
                 "Runs 24/7": bool(settings_payload.get("news_enabled", False)),
-                "Last status": " | ".join(statuses) if statuses else "",
-                "Last refresh (UTC)": last_completed,
-                "Last message": " | ".join(messages) if messages else "",
+                "Last status": str(latest_event.get("status") or "") if latest_event is not None else "",
+                "Last refresh (UTC)": _utc_string(latest_event.get("created_at")) if latest_event is not None else "",
+                "Last message": str(latest_event.get("message") or "") if latest_event is not None else "",
             }
 
         provider_rows = [
-            provider_row("marketaux", "Marketaux", "KR + US", ["KR", "US"], ["marketaux_api_token"]),
-            provider_row("naver", "Naver", "KR", ["KR"], ["naver_client_id", "naver_client_secret"]),
-            provider_row("alpha_vantage", "Alpha Vantage", "US", ["US"], ["alpha_vantage_api_key"]),
+            provider_row("marketaux", "Marketaux", "15 min / 3 items", ["KR", "US"], ["marketaux_api_token"], "MARKETAUX"),
+            provider_row("naver", "Naver", "30 min / 5 items", ["KR"], ["naver_client_id", "naver_client_secret"], "NAVER"),
+            provider_row("alpha_vantage", "Alpha Vantage", "30 min / 5 items", ["US"], ["alpha_vantage_api_key"], "ALPHA_VANTAGE"),
         ]
         st.dataframe(pd.DataFrame(provider_rows), use_container_width=True, hide_index=True)
 

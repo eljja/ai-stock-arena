@@ -6,7 +6,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import AdminSetting, SharedNewsBatch, SharedNewsItem
+from app.db.models import AdminSetting, ExecutionEvent, SharedNewsBatch, SharedNewsItem
 from app.news.alpha_vantage import AlphaVantageNewsClient
 from app.news.marketaux import MarketauxNewsClient
 from app.news.naver import NaverNewsClient
@@ -17,9 +17,14 @@ NEWS_STATE_KEY = "shared_news_state"
 DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES = 30
 RECENT_DEDUPE_HOURS = 24
 CONTEXT_LOOKBACK_MINUTES = 60
-DEFAULT_NEWS_MODE = "shared_hybrid_30m"
+DEFAULT_NEWS_MODE = "shared_multi_provider"
 DEVELOPMENT_FALLBACK = "development_fallback"
 LIVE_STRICT = "live_strict"
+PROVIDER_SPECS = {
+    "marketaux": {"cadence_minutes": 15, "target_count": 3, "markets": {"KR", "US"}},
+    "naver": {"cadence_minutes": 30, "target_count": 5, "markets": {"KR"}},
+    "alpha_vantage": {"cadence_minutes": 30, "target_count": 5, "markets": {"US"}},
+}
 
 
 def get_shared_news_state(session: Session) -> dict:
@@ -76,68 +81,105 @@ def run_due_news_refreshes(session: Session) -> list[str]:
         return []
 
     scheduler_status = get_scheduler_status(session)
-    refresh_interval_minutes = int(runtime_settings.get("news_refresh_interval_minutes") or DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES)
+    enabled_providers = {**{"marketaux": True, "naver": True, "alpha_vantage": True}, **(runtime_settings.get("news_providers", {}) or {})}
     results: list[str] = []
     for market in scheduler_status.get("markets", []):
         if not market.get("enabled"):
             continue
-        market_code = market["market_code"]
-        if not _is_news_due(session, market_code, refresh_interval_minutes=refresh_interval_minutes):
-            continue
-        try:
-            results.append(refresh_shared_news_for_market(session, market_code, trigger_source="scheduler"))
-            session.commit()
-        except Exception as exc:
-            update_shared_news_state(
-                session,
-                market_code,
-                last_completed_at=datetime.now(UTC),
-                last_status="error",
-                last_message=str(exc),
-            )
-            create_execution_event(session, event_type="news", target_type="market", market_code=market_code, trigger_source="scheduler", status="error", code=exc.__class__.__name__, message=str(exc))
-            session.commit()
-            results.append(f"Shared news refresh failed for {market_code}: {exc}")
+        market_code = str(market["market_code"]).upper()
+        for provider in _providers_for_market(market_code, enabled_providers):
+            cadence_minutes = _provider_cadence_minutes(provider)
+            if not _is_provider_due(session, provider, market_code, cadence_minutes=cadence_minutes):
+                continue
+            try:
+                results.append(refresh_shared_news_for_provider(session, market_code, provider, trigger_source="scheduler"))
+                session.commit()
+            except Exception as exc:
+                session.rollback()
+                message = f"{provider} refresh failed for {market_code}: {exc}"
+                update_shared_news_state(
+                    session,
+                    market_code,
+                    last_completed_at=datetime.now(UTC),
+                    last_status="error",
+                    last_message=message,
+                )
+                create_execution_event(
+                    session,
+                    event_type="news",
+                    target_type="provider",
+                    market_code=market_code,
+                    trigger_source="scheduler",
+                    status="error",
+                    code=_provider_event_code(provider),
+                    message=message,
+                )
+                session.commit()
+                results.append(message)
     return results
 
 
 def refresh_shared_news_for_market(session: Session, market_code: str, *, trigger_source: str = "scheduler") -> str:
     runtime_settings = get_runtime_settings(session)
-    collection_policy = runtime_settings.get("news_collection_policy", DEVELOPMENT_FALLBACK)
     enabled_providers = {**{"marketaux": True, "naver": True, "alpha_vantage": True}, **(runtime_settings.get("news_providers", {}) or {})}
+    messages: list[str] = []
+    for provider in _providers_for_market(market_code.upper(), enabled_providers):
+        try:
+            messages.append(refresh_shared_news_for_provider(session, market_code.upper(), provider, trigger_source=trigger_source))
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            message = f"{provider} refresh failed for {market_code.upper()}: {exc}"
+            update_shared_news_state(
+                session,
+                market_code.upper(),
+                last_completed_at=datetime.now(UTC),
+                last_status="error",
+                last_message=message,
+            )
+            create_execution_event(
+                session,
+                event_type="news",
+                target_type="provider",
+                market_code=market_code.upper(),
+                trigger_source=trigger_source,
+                status="error",
+                code=_provider_event_code(provider),
+                message=message,
+            )
+            session.commit()
+            messages.append(message)
+    return " | ".join(messages) if messages else f"No configured news providers for {market_code.upper()}."
+
+
+def refresh_shared_news_for_provider(session: Session, market_code: str, provider: str, *, trigger_source: str = "scheduler") -> str:
+    runtime_settings = get_runtime_settings(session)
     started_at = datetime.now(UTC)
+    cadence_minutes = _provider_cadence_minutes(provider)
+    target_count = _provider_target_count(provider)
     update_shared_news_state(
         session,
         market_code,
         last_started_at=started_at,
         last_status="running",
-        last_message=f"Refreshing shared news for {market_code}.",
+        last_message=f"Refreshing {provider} shared news for {market_code}.",
     )
     session.flush()
 
     window_end = datetime.now(UTC)
+    window_start = window_end - timedelta(minutes=cadence_minutes)
     recent_keys = _recent_news_keys(session, market_code, now=window_end)
-    selected_window_label = f"{DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES}m"
-    provider_items: list[object] = []
-    provider_status: list[str] = []
-
-    for window_start, window_label in _candidate_news_windows(session, market_code, now=window_end, collection_policy=collection_policy):
-        provider_items, provider_status = _collect_news_from_providers(
-            session,
-            market_code,
-            published_after=window_start,
-            published_before=window_end,
-            existing_keys=recent_keys,
-            collection_policy=collection_policy,
-            enabled_providers=enabled_providers,
-        )
-        if provider_items:
-            selected_window_label = window_label
-            break
+    provider_items, provider_status = _collect_provider_news(
+        market_code=market_code,
+        provider=provider,
+        published_after=window_start,
+        published_before=window_end,
+        existing_keys=recent_keys,
+        target_count=target_count,
+    )
 
     if not provider_items:
-        detail = '; '.join(provider_status) if provider_status else 'no providers returned items'
-        message = f"No new unique shared news for {market_code} in the refresh windows ({detail})."
+        message = f"No new unique {provider} shared news for {market_code} in the last {cadence_minutes}m ({provider_status})."
         update_shared_news_state(
             session,
             market_code,
@@ -145,11 +187,20 @@ def refresh_shared_news_for_market(session: Session, market_code: str, *, trigge
             last_status="empty",
             last_message=message,
         )
-        create_execution_event(session, event_type="news", target_type="market", market_code=market_code, trigger_source=trigger_source, status="empty", message=message)
+        create_execution_event(
+            session,
+            event_type="news",
+            target_type="provider",
+            market_code=market_code,
+            trigger_source=trigger_source,
+            status="empty",
+            code=_provider_event_code(provider),
+            message=message,
+        )
         return message
 
     provider_items.sort(key=lambda item: ((getattr(item, 'published_at', None) or datetime.min.replace(tzinfo=UTC)), float(getattr(item, 'significance_score', 0.0))), reverse=True)
-    batch = _store_news_batch(session, market_code, provider_items[:10], created_at=window_end, window_label=selected_window_label)
+    batch = _store_news_batch(session, market_code, provider, provider_items[:target_count], created_at=window_end, window_label=f"{cadence_minutes}m")
     if runtime_settings.get("news_mode") != DEFAULT_NEWS_MODE:
         runtime_settings["news_mode"] = DEFAULT_NEWS_MODE
         setting = session.scalar(select(AdminSetting).where(AdminSetting.key == "runtime_controls"))
@@ -157,7 +208,7 @@ def refresh_shared_news_for_market(session: Session, market_code: str, *, trigge
             setting.value_json = runtime_settings
             setting.updated_at = datetime.now(UTC)
 
-    message = f"Stored {len(provider_items[:10])} unique shared news items for {market_code} in batch {batch.batch_key} using {selected_window_label} window ({'; '.join(provider_status)})."
+    message = f"Stored {len(provider_items[:target_count])} {provider} shared news items for {market_code} in batch {batch.batch_key} using {cadence_minutes}m window ({provider_status})."
     update_shared_news_state(
         session,
         market_code,
@@ -165,7 +216,16 @@ def refresh_shared_news_for_market(session: Session, market_code: str, *, trigge
         last_status="success",
         last_message=message,
     )
-    create_execution_event(session, event_type="news", target_type="market", market_code=market_code, trigger_source=trigger_source, status="success", message=message)
+    create_execution_event(
+        session,
+        event_type="news",
+        target_type="provider",
+        market_code=market_code,
+        trigger_source=trigger_source,
+        status="success",
+        code=_provider_event_code(provider),
+        message=message,
+    )
     return message
 
 
@@ -202,7 +262,7 @@ def recent_news_context(session: Session, market_code: str, *, minutes: int = CO
 def get_shared_news_status(session: Session) -> dict[str, dict]:
     scheduler_status = get_scheduler_status(session)
     runtime_settings = get_runtime_settings(session)
-    refresh_interval_minutes = int(runtime_settings.get("news_refresh_interval_minutes") or DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES)
+    enabled_providers = {**{"marketaux": True, "naver": True, "alpha_vantage": True}, **(runtime_settings.get("news_providers", {}) or {})}
     state = get_shared_news_state(session)
     markets_state = state.get("markets", {})
     payload: dict[str, dict] = {}
@@ -211,7 +271,7 @@ def get_shared_news_status(session: Session) -> dict[str, dict]:
         entry = markets_state.get(market_code, {})
         payload[market_code] = {
             "news_in_active_window": bool(runtime_settings.get("news_enabled", False)),
-            "news_is_due": _is_news_due(session, market_code, refresh_interval_minutes=refresh_interval_minutes) if runtime_settings.get("news_enabled", False) else False,
+            "news_is_due": any(_is_provider_due(session, provider, market_code, cadence_minutes=_provider_cadence_minutes(provider)) for provider in _providers_for_market(market_code, enabled_providers)) if runtime_settings.get("news_enabled", False) else False,
             "news_last_started_at": _deserialize_datetime(entry.get("last_started_at")),
             "news_last_completed_at": _deserialize_datetime(entry.get("last_completed_at")),
             "news_last_status": entry.get("last_status"),
@@ -220,109 +280,91 @@ def get_shared_news_status(session: Session) -> dict[str, dict]:
     return payload
 
 
-def _is_news_due(session: Session, market_code: str, *, refresh_interval_minutes: int = DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES) -> bool:
-    state = get_shared_news_state(session)
-    market_state = state.get("markets", {}).get(market_code, {})
-    last_completed_at = _deserialize_datetime(market_state.get("last_completed_at"))
-    if last_completed_at is None:
+def _providers_for_market(market_code: str, enabled_providers: dict[str, bool]) -> list[str]:
+    market_code = market_code.upper()
+    providers: list[str] = []
+    for provider, spec in PROVIDER_SPECS.items():
+        if market_code not in spec["markets"]:
+            continue
+        if not enabled_providers.get(provider, True):
+            continue
+        providers.append(provider)
+    return providers
+
+
+def _provider_cadence_minutes(provider: str) -> int:
+    return int(PROVIDER_SPECS[provider]["cadence_minutes"])
+
+
+def _provider_target_count(provider: str) -> int:
+    return int(PROVIDER_SPECS[provider]["target_count"])
+
+
+def _provider_event_code(provider: str) -> str:
+    return provider.upper()
+
+
+def _is_provider_due(session: Session, provider: str, market_code: str, *, cadence_minutes: int) -> bool:
+    latest = session.scalar(
+        select(ExecutionEvent)
+        .where(ExecutionEvent.event_type == "news")
+        .where(ExecutionEvent.target_type == "provider")
+        .where(ExecutionEvent.market_code == market_code.upper())
+        .where(ExecutionEvent.code == _provider_event_code(provider))
+        .order_by(ExecutionEvent.created_at.desc())
+        .limit(1)
+    )
+    if latest is None or latest.created_at is None:
         return True
-    return datetime.now(UTC) >= last_completed_at + timedelta(minutes=refresh_interval_minutes)
+    return datetime.now(UTC) >= latest.created_at + timedelta(minutes=cadence_minutes)
 
 
-def _news_window_start(session: Session, market_code: str, *, now: datetime) -> datetime:
-    state = get_shared_news_state(session)
-    market_state = state.get("markets", {}).get(market_code, {})
-    last_completed_at = _deserialize_datetime(market_state.get("last_completed_at"))
-    if last_completed_at is None:
-        return now - timedelta(minutes=DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES)
-    return max(last_completed_at - timedelta(minutes=2), now - timedelta(minutes=DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES))
-
-
-def _candidate_news_windows(session: Session, market_code: str, *, now: datetime, collection_policy: str) -> list[tuple[datetime, str]]:
-    primary_start = _news_window_start(session, market_code, now=now)
-    if collection_policy == LIVE_STRICT:
-        return [(primary_start, f"{DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES}m")]
-    return [
-        (primary_start, f"{DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES}m"),
-        (now - timedelta(hours=1), "1h"),
-        (now - timedelta(hours=6), "6h"),
-        (now - timedelta(hours=24), "24h"),
-        (now - timedelta(days=7), "7d"),
-    ]
-
-
-def _collect_news_from_providers(
-    session: Session,
-    market_code: str,
+def _collect_provider_news(
     *,
+    market_code: str,
+    provider: str,
     published_after: datetime,
     published_before: datetime,
     existing_keys: set[str],
-    collection_policy: str,
-    enabled_providers: dict[str, bool],
-) -> tuple[list[object], list[str]]:
-    items: list[object] = []
-    status_parts: list[str] = []
-    seen_keys = set(existing_keys)
-
-    def add_items(label: str, fetched: list[object]) -> None:
-        added = 0
-        for item in fetched:
-            key = getattr(item, "dedupe_key", None)
-            if not key or key in seen_keys:
-                continue
-            seen_keys.add(key)
-            items.append(item)
-            added += 1
-        status_parts.append(f"{label}:{added}")
-
-    if enabled_providers.get("marketaux", True):
+    target_count: int,
+) -> tuple[list[object], str]:
+    if provider == "marketaux":
         try:
-            marketaux_items = MarketauxNewsClient().fetch_recent_news(
+            items = MarketauxNewsClient().fetch_recent_news(
                 market_code,
                 published_after=published_after,
                 published_before=published_before,
-                target_count=5,
-                max_pages=2 if collection_policy == LIVE_STRICT else 4,
-                existing_keys=seen_keys,
-                collection_policy=collection_policy,
+                target_count=target_count,
+                max_pages=1,
+                existing_keys=existing_keys,
+                collection_policy=LIVE_STRICT,
             )
-            add_items("marketaux", marketaux_items)
+            return items, f"marketaux:{len(items)}"
         except Exception as exc:
-            status_parts.append(f"marketaux_error:{exc.__class__.__name__}")
-    else:
-        status_parts.append("marketaux:disabled")
-
-    if market_code.upper() == "KR":
-        if enabled_providers.get("naver", True):
-            try:
-                naver_items = NaverNewsClient().fetch_recent_news(
-                    published_after=published_after,
-                    published_before=published_before,
-                    target_count=5,
-                    existing_keys=seen_keys,
-                )
-                add_items("naver", naver_items)
-            except Exception as exc:
-                status_parts.append(f"naver_error:{exc.__class__.__name__}")
-        else:
-            status_parts.append("naver:disabled")
-    elif market_code.upper() == "US":
-        if enabled_providers.get("alpha_vantage", True):
-            try:
-                alpha_items = AlphaVantageNewsClient().fetch_recent_news(
-                    published_after=published_after,
-                    published_before=published_before,
-                    target_count=5,
-                    existing_keys=seen_keys,
-                )
-                add_items("alpha_vantage", alpha_items)
-            except Exception as exc:
-                status_parts.append(f"alpha_vantage_error:{exc.__class__.__name__}")
-        else:
-            status_parts.append("alpha_vantage:disabled")
-
-    return items, status_parts
+            return [], f"marketaux_error:{exc.__class__.__name__}"
+    if provider == "naver":
+        try:
+            items = NaverNewsClient().fetch_recent_news(
+                published_after=published_after,
+                published_before=published_before,
+                target_count=target_count,
+                existing_keys=existing_keys,
+            )
+            return items, f"naver:{len(items)}"
+        except Exception as exc:
+            return [], f"naver_error:{exc.__class__.__name__}"
+    if provider == "alpha_vantage":
+        try:
+            items = AlphaVantageNewsClient().fetch_recent_news(
+                published_after=published_after,
+                published_before=published_before,
+                target_count=target_count,
+                existing_keys=existing_keys,
+            )
+            return items, f"alpha_vantage:{len(items)}"
+        except Exception as exc:
+            return [], f"alpha_vantage_error:{exc.__class__.__name__}"
+    raise ValueError(f"Unsupported news provider: {provider}")
 
 
 def _recent_news_keys(session: Session, market_code: str, *, now: datetime) -> set[str]:
@@ -335,13 +377,13 @@ def _recent_news_keys(session: Session, market_code: str, *, now: datetime) -> s
     return {_row_key(row) for row in rows}
 
 
-def _store_news_batch(session: Session, market_code: str, articles: list[object], *, created_at: datetime, window_label: str) -> SharedNewsBatch:
-    batch_key = f"hybrid:{market_code}:{created_at.strftime('%Y%m%dT%H%M%S')}"
+def _store_news_batch(session: Session, market_code: str, provider: str, articles: list[object], *, created_at: datetime, window_label: str) -> SharedNewsBatch:
+    batch_key = f"{provider}:{market_code}:{created_at.strftime('%Y%m%dT%H%M%S')}"
     batch = SharedNewsBatch(
         batch_key=batch_key,
         market_code=market_code,
-        source="hybrid",
-        summary=f"{len(articles)} unique items collected for {market_code} using the {window_label} refresh window from the configured hybrid providers.",
+        source=provider,
+        summary=f"{len(articles)} unique items collected for {market_code} using the {provider} provider and the {window_label} refresh window.",
         is_active=True,
         created_at=created_at,
     )
