@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,7 +11,7 @@ from app.services.runtime_secrets import get_runtime_secret
 
 BASE_URL = "https://openapi.naver.com/v1/search/news.json"
 SUMMARY_LIMIT = 220
-DEFAULT_QUERY = "\uacbd\uc81c OR \uc99d\uc2dc OR \ucf54\uc2a4\ud53c OR \ucf54\uc2a4\ub2e5 OR \ud658\uc728 OR \uae08\ub9ac OR \ud55c\uad6d\uc740\ud589"
+DEFAULT_QUERY = "\uc99d\uc2dc"
 
 
 @dataclass(slots=True)
