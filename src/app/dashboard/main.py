@@ -219,16 +219,16 @@ def _news_preview_rows(news_batches: list[dict], limit: int = 20) -> str:
     for batch in news_batches or []:
         for item in batch.get("items", []):
             published = str(item.get("published_at") or "")
-            source = str(item.get("source") or "Unknown source")
-            title = str(item.get("title") or "Untitled")
-            summary = str(item.get("summary") or "")
+            source = html.unescape(str(item.get("source") or "Unknown source"))
+            title = html.unescape(str(item.get("title") or "Untitled"))
+            summary = html.unescape(str(item.get("summary") or ""))
             tickers = ", ".join(item.get("tickers") or [])
             detail = " | ".join(part for part in [title, summary, source, tickers] if part)
             flattened.append(
                 {
                     "published_at": published,
                     "time_label": published[2:16].replace("T", " ") if published else "No time",
-                    "line": f"[{source}] {title}",
+                    "line": title,
                     "detail": detail,
                 }
             )
@@ -1187,11 +1187,15 @@ with news_tab:
     for batch in news_batches:
         with st.expander(f"{batch['market_code']} | {batch['batch_key']} | {batch['created_at']}"):
             if batch.get("summary"):
-                st.write(batch["summary"])
+                st.write(html.unescape(str(batch["summary"])))
             items = pd.DataFrame(batch.get("items", []))
             if items.empty:
                 st.caption("No items in this batch.")
             else:
+                if "title" in items.columns:
+                    items["title"] = items["title"].fillna("").map(lambda v: html.unescape(str(v)))
+                if "summary" in items.columns:
+                    items["summary"] = items["summary"].fillna("").map(lambda v: html.unescape(str(v)))
                 st.dataframe(items, use_container_width=True, hide_index=True)
 
 with detail_tab:
@@ -1315,34 +1319,41 @@ with admin_tab:
             scheduler_df,
             ["last_started_at", "last_completed_at", "next_run_at", "news_last_started_at", "news_last_completed_at"],
         )
+        admin_secrets = load_admin_secrets(api_base_url or None, current_admin_token)
+        news_provider_flags = {**{"marketaux": True, "naver": True, "alpha_vantage": True}, **(settings_payload.get("news_providers", {}) or {})}
         runtime_cols = st.columns([1.2, 1.2, 1.6])
         runtime_cols[0].metric("Trade cadence", f"{int(settings_payload.get('decision_interval_minutes', 60))} min")
         runtime_cols[1].metric("News refresh cadence", f"{int(settings_payload.get('news_refresh_interval_minutes', 30))} min")
         runtime_cols[2].metric("News policy", str(settings_payload.get("news_collection_policy", "development_fallback")))
 
-        if not scheduler_admin_df.empty:
-            news_status_df = scheduler_admin_df[[
-                "market_code",
-                "window_label_utc",
-                "in_active_window",
-                "news_in_active_window",
-                "news_is_due",
-                "news_last_status",
-                "news_last_completed_at",
-                "news_last_message",
-            ]].rename(
-                columns={
-                    "market_code": "Market",
-                    "window_label_utc": "Runtime window (UTC)",
-                    "in_active_window": "Trade window active",
-                    "news_in_active_window": "News window active",
-                    "news_is_due": "News due now",
-                    "news_last_status": "Last news status",
-                    "news_last_completed_at": "Last news refresh (UTC)",
-                    "news_last_message": "Last news message",
-                }
-            )
-            st.dataframe(news_status_df, use_container_width=True, hide_index=True)
+        market_state_map = {
+            row.get("market_code"): row
+            for _, row in scheduler_admin_df.iterrows()
+        } if not scheduler_admin_df.empty else {}
+
+        def provider_row(provider_key: str, label: str, scope: str, status_market_codes: list[str], secret_keys: list[str]) -> dict:
+            relevant_rows = [market_state_map.get(code) for code in status_market_codes if market_state_map.get(code) is not None]
+            completed_values = [row.get("news_last_completed_at") for row in relevant_rows if row.get("news_last_completed_at")]
+            last_completed = max(completed_values) if completed_values else ""
+            statuses = [str(row.get("news_last_status") or "") for row in relevant_rows if row.get("news_last_status")]
+            messages = [str(row.get("news_last_message") or "") for row in relevant_rows if row.get("news_last_message")]
+            return {
+                "Provider": label,
+                "Scope": scope,
+                "Enabled": bool(news_provider_flags.get(provider_key, True)),
+                "Configured": all(bool(admin_secrets.get(key)) for key in secret_keys),
+                "Runs 24/7": bool(settings_payload.get("news_enabled", False)),
+                "Last status": " | ".join(statuses) if statuses else "",
+                "Last refresh (UTC)": last_completed,
+                "Last message": " | ".join(messages) if messages else "",
+            }
+
+        provider_rows = [
+            provider_row("marketaux", "Marketaux", "KR + US", ["KR", "US"], ["marketaux_api_token"]),
+            provider_row("naver", "Naver", "KR", ["KR"], ["naver_client_id", "naver_client_secret"]),
+            provider_row("alpha_vantage", "Alpha Vantage", "US", ["US"], ["alpha_vantage_api_key"]),
+        ]
+        st.dataframe(pd.DataFrame(provider_rows), use_container_width=True, hide_index=True)
 
         with st.form("runtime_settings_form"):
             cadence = st.slider(
@@ -1371,9 +1382,14 @@ with admin_tab:
                 "News collection policy",
                 ["development_fallback", "live_strict"],
                 index=0 if str(settings_payload.get("news_collection_policy", "development_fallback")) == "development_fallback" else 1,
-                help="development_fallback keeps wider local testing fallback windows. live_strict uses only the current 30-minute window inside the active runtime window.",
+                help="development_fallback keeps wider backfill windows. live_strict stays on the current refresh window only.",
             )
-            st.markdown("**Runtime windows (UTC)**")
+            st.markdown("**News providers**")
+            news_provider_marketaux = st.checkbox("Enable Marketaux", value=bool(news_provider_flags.get("marketaux", True)))
+            news_provider_naver = st.checkbox("Enable Naver", value=bool(news_provider_flags.get("naver", True)))
+            news_provider_alpha = st.checkbox("Enable Alpha Vantage", value=bool(news_provider_flags.get("alpha_vantage", True)))
+            st.caption("News providers run on the configured cadence across the full day. Trade runtime windows remain KR/US specific below.")
+            st.markdown("**Trade runtime windows (UTC)**")
             kr_window = market_windows.get("KR", {})
             us_window = market_windows.get("US", {})
             kr_start_utc = st.text_input("KR window start (UTC)", value=kr_window.get("window_start_utc", "23:00"))
@@ -1387,6 +1403,11 @@ with admin_tab:
                     "news_enabled": news_enabled,
                     "news_collection_policy": news_collection_policy,
                     "news_refresh_interval_minutes": news_refresh_interval,
+                    "news_providers": {
+                        "marketaux": news_provider_marketaux,
+                        "naver": news_provider_naver,
+                        "alpha_vantage": news_provider_alpha,
+                    },
                     "markets": {
                         "KR": {
                             "enabled": True,
@@ -1502,7 +1523,6 @@ with admin_tab:
 
         st.markdown("**Runtime secrets**")
         show_secrets = st.toggle("Show secrets", key="dashboard_show_admin_secrets")
-        admin_secrets = load_admin_secrets(api_base_url or None, current_admin_token)
         with st.form("runtime_secrets_form"):
             openrouter_value = st.text_input(
                 "OpenRouter API token",
@@ -1736,7 +1756,7 @@ with admin_tab:
         if not scheduler_admin_df.empty:
             st.markdown("**Scheduler status (UTC)**")
             st.dataframe(
-                scheduler_admin_df[["market_code", "market_timezone", "window_label_utc", "in_active_window", "is_due", "last_status", "last_completed_at", "next_run_at", "news_in_active_window", "news_is_due", "news_last_status", "news_last_completed_at", "news_last_message"]].rename(
+                scheduler_admin_df[["market_code", "market_timezone", "window_label_utc", "in_active_window", "is_due", "last_status", "last_completed_at", "next_run_at"]].rename(
                     columns={
                         "market_code": "Market",
                         "market_timezone": "Timezone",
@@ -1746,11 +1766,6 @@ with admin_tab:
                         "last_status": "Trade last status",
                         "last_completed_at": "Trade last completed (UTC)",
                         "next_run_at": "Next trade run (UTC)",
-                        "news_in_active_window": "News window",
-                        "news_is_due": "News due now",
-                        "news_last_status": "News last status",
-                        "news_last_completed_at": "News last completed (UTC)",
-                        "news_last_message": "News last message",
                     }
                 ),
                 use_container_width=True,

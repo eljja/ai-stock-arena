@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import email.utils
+import html
 import re
 
 import httpx
@@ -110,7 +111,7 @@ class NaverNewsClient:
 
 def _strip_html(text: str) -> str:
     text = re.sub(r"<[^>]+>", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    return html.unescape(re.sub(r"\s+", " ", text).strip())
 
 
 def _summarize_text(text: str) -> str:

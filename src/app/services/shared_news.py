@@ -79,7 +79,7 @@ def run_due_news_refreshes(session: Session) -> list[str]:
     refresh_interval_minutes = int(runtime_settings.get("news_refresh_interval_minutes") or DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES)
     results: list[str] = []
     for market in scheduler_status.get("markets", []):
-        if not market.get("enabled") or not market.get("in_active_window"):
+        if not market.get("enabled"):
             continue
         market_code = market["market_code"]
         if not _is_news_due(session, market_code, refresh_interval_minutes=refresh_interval_minutes):
@@ -104,6 +104,7 @@ def run_due_news_refreshes(session: Session) -> list[str]:
 def refresh_shared_news_for_market(session: Session, market_code: str, *, trigger_source: str = "scheduler") -> str:
     runtime_settings = get_runtime_settings(session)
     collection_policy = runtime_settings.get("news_collection_policy", DEVELOPMENT_FALLBACK)
+    enabled_providers = {**{"marketaux": True, "naver": True, "alpha_vantage": True}, **(runtime_settings.get("news_providers", {}) or {})}
     started_at = datetime.now(UTC)
     update_shared_news_state(
         session,
@@ -128,6 +129,7 @@ def refresh_shared_news_for_market(session: Session, market_code: str, *, trigge
             published_before=window_end,
             existing_keys=recent_keys,
             collection_policy=collection_policy,
+            enabled_providers=enabled_providers,
         )
         if provider_items:
             selected_window_label = window_label
@@ -208,8 +210,8 @@ def get_shared_news_status(session: Session) -> dict[str, dict]:
         market_code = market["market_code"]
         entry = markets_state.get(market_code, {})
         payload[market_code] = {
-            "news_in_active_window": market.get("in_active_window", False),
-            "news_is_due": _is_news_due(session, market_code, refresh_interval_minutes=refresh_interval_minutes) if market.get("in_active_window", False) else False,
+            "news_in_active_window": bool(runtime_settings.get("news_enabled", False)),
+            "news_is_due": _is_news_due(session, market_code, refresh_interval_minutes=refresh_interval_minutes) if runtime_settings.get("news_enabled", False) else False,
             "news_last_started_at": _deserialize_datetime(entry.get("last_started_at")),
             "news_last_completed_at": _deserialize_datetime(entry.get("last_completed_at")),
             "news_last_status": entry.get("last_status"),
@@ -257,6 +259,7 @@ def _collect_news_from_providers(
     published_before: datetime,
     existing_keys: set[str],
     collection_policy: str,
+    enabled_providers: dict[str, bool],
 ) -> tuple[list[object], list[str]]:
     items: list[object] = []
     status_parts: list[str] = []
@@ -273,42 +276,51 @@ def _collect_news_from_providers(
             added += 1
         status_parts.append(f"{label}:{added}")
 
-    try:
-        marketaux_items = MarketauxNewsClient().fetch_recent_news(
-            market_code,
-            published_after=published_after,
-            published_before=published_before,
-            target_count=5,
-            max_pages=2 if collection_policy == LIVE_STRICT else 4,
-            existing_keys=seen_keys,
-            collection_policy=collection_policy,
-        )
-        add_items("marketaux", marketaux_items)
-    except Exception as exc:
-        status_parts.append(f"marketaux_error:{exc.__class__.__name__}")
+    if enabled_providers.get("marketaux", True):
+        try:
+            marketaux_items = MarketauxNewsClient().fetch_recent_news(
+                market_code,
+                published_after=published_after,
+                published_before=published_before,
+                target_count=5,
+                max_pages=2 if collection_policy == LIVE_STRICT else 4,
+                existing_keys=seen_keys,
+                collection_policy=collection_policy,
+            )
+            add_items("marketaux", marketaux_items)
+        except Exception as exc:
+            status_parts.append(f"marketaux_error:{exc.__class__.__name__}")
+    else:
+        status_parts.append("marketaux:disabled")
 
     if market_code.upper() == "KR":
-        try:
-            naver_items = NaverNewsClient().fetch_recent_news(
-                published_after=published_after,
-                published_before=published_before,
-                target_count=5,
-                existing_keys=seen_keys,
-            )
-            add_items("naver", naver_items)
-        except Exception as exc:
-            status_parts.append(f"naver_error:{exc.__class__.__name__}")
+        if enabled_providers.get("naver", True):
+            try:
+                naver_items = NaverNewsClient().fetch_recent_news(
+                    published_after=published_after,
+                    published_before=published_before,
+                    target_count=5,
+                    existing_keys=seen_keys,
+                )
+                add_items("naver", naver_items)
+            except Exception as exc:
+                status_parts.append(f"naver_error:{exc.__class__.__name__}")
+        else:
+            status_parts.append("naver:disabled")
     elif market_code.upper() == "US":
-        try:
-            alpha_items = AlphaVantageNewsClient().fetch_recent_news(
-                published_after=published_after,
-                published_before=published_before,
-                target_count=5,
-                existing_keys=seen_keys,
-            )
-            add_items("alpha_vantage", alpha_items)
-        except Exception as exc:
-            status_parts.append(f"alpha_vantage_error:{exc.__class__.__name__}")
+        if enabled_providers.get("alpha_vantage", True):
+            try:
+                alpha_items = AlphaVantageNewsClient().fetch_recent_news(
+                    published_after=published_after,
+                    published_before=published_before,
+                    target_count=5,
+                    existing_keys=seen_keys,
+                )
+                add_items("alpha_vantage", alpha_items)
+            except Exception as exc:
+                status_parts.append(f"alpha_vantage_error:{exc.__class__.__name__}")
+        else:
+            status_parts.append("alpha_vantage:disabled")
 
     return items, status_parts
 

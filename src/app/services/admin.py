@@ -42,6 +42,7 @@ DEFAULT_RUNTIME_SETTINGS = {
     "news_mode": "shared_off",
     "news_collection_policy": "development_fallback",
     "news_refresh_interval_minutes": 30,
+    "news_providers": {"marketaux": True, "naver": True, "alpha_vantage": True},
 }
 
 DEFAULT_SCHEDULER_ENTRY = {
@@ -78,6 +79,7 @@ def get_runtime_settings(session: Session) -> dict:
     value["news_refresh_interval_minutes"] = int(value.get("news_refresh_interval_minutes") or 30)
     value["news_collection_policy"] = value.get("news_collection_policy") or default_news_collection_policy()
     value["news_mode"] = _derive_news_mode(bool(value.get("news_enabled", False)), int(value.get("news_refresh_interval_minutes") or 30))
+    value["news_providers"] = {**DEFAULT_RUNTIME_SETTINGS.get("news_providers", {}), **(value.get("news_providers", {}))}
     markets = {**DEFAULT_RUNTIME_SETTINGS.get("markets", {}), **(value.get("markets", {}))}
     changed = False
     us_window = markets.get("US", {})
@@ -103,6 +105,8 @@ def update_runtime_settings(session: Session, payload: dict) -> dict:
     merged["news_refresh_interval_minutes"] = int(merged.get("news_refresh_interval_minutes") or 30)
     merged["news_collection_policy"] = merged.get("news_collection_policy") or default_news_collection_policy()
     merged["news_mode"] = _derive_news_mode(bool(merged.get("news_enabled", False)), int(merged.get("news_refresh_interval_minutes") or 30))
+    if "news_providers" in payload:
+        merged["news_providers"] = {**current.get("news_providers", {}), **payload["news_providers"]}
     if "markets" in payload:
         merged["markets"] = {**current.get("markets", {}), **payload["markets"]}
     setting = session.scalar(select(AdminSetting).where(AdminSetting.key == RUNTIME_SETTINGS_KEY))
