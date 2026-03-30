@@ -622,7 +622,7 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
         leader_name = html.escape(str(leader.get("display_name") or leader.get("model_id")))
         leader_return = _pct(leader.get("current_return_pct"))
     refresh_minutes = int(settings_payload.get("news_refresh_interval_minutes", 30) or 30)
-    news_mode = "OFF" if not settings_payload.get("news_enabled", False) else f"MARKETAUX {refresh_minutes}M"
+    news_mode = "OFF" if not settings_payload.get("news_enabled", False) else f"HYBRID {refresh_minutes}M"
     news_policy = str(settings_payload.get("news_collection_policy", "development_fallback")).replace("_", " ").title()
     news_rows = _news_preview_rows(news_batches, limit=20)
     st.markdown(
@@ -1514,11 +1514,35 @@ with admin_tab:
                 value=admin_secrets.get("marketaux_api_token") or "",
                 type="default" if show_secrets else "password",
             )
-            st.caption(f"Masked preview: OpenRouter={_mask_secret(admin_secrets.get('openrouter_api_key'))} | Marketaux={_mask_secret(admin_secrets.get('marketaux_api_token'))}")
+            naver_client_id = st.text_input(
+                "Naver client id",
+                value=admin_secrets.get("naver_client_id") or "",
+                type="default" if show_secrets else "password",
+            )
+            naver_client_secret = st.text_input(
+                "Naver client secret",
+                value=admin_secrets.get("naver_client_secret") or "",
+                type="default" if show_secrets else "password",
+            )
+            alpha_vantage_api_key = st.text_input(
+                "Alpha Vantage API key",
+                value=admin_secrets.get("alpha_vantage_api_key") or "",
+                type="default" if show_secrets else "password",
+            )
+            st.caption(
+                f"Masked preview: OpenRouter={_mask_secret(admin_secrets.get('openrouter_api_key'))} | "
+                f"Marketaux={_mask_secret(admin_secrets.get('marketaux_api_token'))} | "
+                f"Naver ID={_mask_secret(admin_secrets.get('naver_client_id'))} | "
+                f"Naver Secret={_mask_secret(admin_secrets.get('naver_client_secret'))} | "
+                f"Alpha Vantage={_mask_secret(admin_secrets.get('alpha_vantage_api_key'))}"
+            )
             if st.form_submit_button("Save secrets"):
                 payload = {
                     "openrouter_api_key": openrouter_value,
                     "marketaux_api_token": marketaux_value,
+                    "naver_client_id": naver_client_id,
+                    "naver_client_secret": naver_client_secret,
+                    "alpha_vantage_api_key": alpha_vantage_api_key,
                 }
                 if api_base_url:
                     with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:

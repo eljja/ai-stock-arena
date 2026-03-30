@@ -77,4 +77,7 @@ class Settings(BaseSettings):
     api_base_url: str | None = Field(default=None, alias="API_BASE_URL")
     admin_token: str | None = Field(default=None, alias="ADMIN_TOKEN")
     marketaux_api_token: str | None = Field(default=None, alias="MARKETAUX_API_TOKEN")
+    naver_client_id: str | None = Field(default=None, alias="NAVER_CLIENT_ID")
+    naver_client_secret: str | None = Field(default=None, alias="NAVER_CLIENT_SECRET")
+    alpha_vantage_api_key: str | None = Field(default=None, alias="ALPHA_VANTAGE_API_KEY")
 

@@ -110,57 +110,10 @@ class MarketauxNewsClient:
 
     def _request_variants(self, market_code: str, collection_policy: str) -> list[dict[str, str]]:
         market_code = market_code.upper()
-        if collection_policy == "live_strict":
-            return [self._primary_variant(market_code)]
-        return self._development_variants(market_code)
-
-    def _primary_variant(self, market_code: str) -> dict[str, str]:
-        if market_code == "US":
-            return {
-                "countries": "us",
-                "language": "en",
-                "search": 'stock market | earnings | guidance | federal reserve | inflation | nasdaq | s&p 500',
-                "sort": "published_at",
-                "sort_order": "desc",
-            }
-        if market_code == "KR":
-            return {
-                "countries": "kr",
-                "language": "ko,en",
-                "search": 'KOSPI | KOSDAQ | Korea stock market | Korea equities | Samsung | SK Hynix',
-                "sort": "published_at",
-                "sort_order": "desc",
-            }
-        raise ValueError(f"Unsupported market code for Marketaux: {market_code}")
-
-    def _development_variants(self, market_code: str) -> list[dict[str, str]]:
-        if market_code == "US":
-            return [
-                {
-                    "countries": "us",
-                    "language": "en",
-                    "entity_types": "equity,index,etf",
-                    "must_have_entities": "true",
-                    "filter_entities": "true",
-                    "sort": "entity_match_score",
-                    "sort_order": "desc",
-                },
-                self._primary_variant(market_code),
-            ]
-        if market_code == "KR":
-            return [
-                {
-                    "countries": "kr",
-                    "language": "ko,en",
-                    "entity_types": "equity,index,etf",
-                    "must_have_entities": "true",
-                    "filter_entities": "true",
-                    "sort": "entity_match_score",
-                    "sort_order": "desc",
-                },
-                self._primary_variant(market_code),
-            ]
-        raise ValueError(f"Unsupported market code for Marketaux: {market_code}")
+        if market_code not in {"US", "KR"}:
+            raise ValueError(f"Unsupported market code for Marketaux: {market_code}")
+        # Intentionally unfiltered per user request: no country, language, search, or entity restrictions.
+        return [{"sort": "published_at", "sort_order": "desc"}]
 
     def _parse_item(self, raw_item: dict, market_code: str) -> MarketauxNewsItem | None:
         title = str(raw_item.get("title") or "").strip()
@@ -177,8 +130,7 @@ class MarketauxNewsClient:
             if not isinstance(entity, dict):
                 continue
             symbol = str(entity.get("symbol") or "").strip()
-            country = str(entity.get("country") or "").strip().lower()
-            if symbol and country == market_code.lower():
+            if symbol:
                 tickers.append(symbol)
             match_score = float(entity.get("match_score") or 0.0)
             sentiment_score = abs(float(entity.get("sentiment_score") or 0.0))

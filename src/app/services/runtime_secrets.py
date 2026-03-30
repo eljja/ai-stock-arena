@@ -13,6 +13,9 @@ RUNTIME_SECRETS_KEY = "runtime_secrets"
 SECRET_FIELDS = {
     "openrouter_api_key": "OPENROUTER_API_KEY",
     "marketaux_api_token": "MARKETAUX_API_TOKEN",
+    "naver_client_id": "NAVER_CLIENT_ID",
+    "naver_client_secret": "NAVER_CLIENT_SECRET",
+    "alpha_vantage_api_key": "ALPHA_VANTAGE_API_KEY",
 }
 
 
@@ -23,6 +26,9 @@ def get_runtime_secrets(session: Session) -> dict[str, str | None]:
     return {
         "openrouter_api_key": stored.get("openrouter_api_key") or settings.openrouter_api_key,
         "marketaux_api_token": stored.get("marketaux_api_token") or settings.marketaux_api_token,
+        "naver_client_id": stored.get("naver_client_id") or settings.naver_client_id,
+        "naver_client_secret": stored.get("naver_client_secret") or settings.naver_client_secret,
+        "alpha_vantage_api_key": stored.get("alpha_vantage_api_key") or settings.alpha_vantage_api_key,
     }
 
 

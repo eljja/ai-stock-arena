@@ -194,11 +194,17 @@ class ResetResponse(BaseModel):
 class RuntimeSecretsResponse(BaseModel):
     openrouter_api_key: str | None
     marketaux_api_token: str | None
+    naver_client_id: str | None
+    naver_client_secret: str | None
+    alpha_vantage_api_key: str | None
 
 
 class RuntimeSecretsUpdate(BaseModel):
     openrouter_api_key: str | None = None
     marketaux_api_token: str | None = None
+    naver_client_id: str | None = None
+    naver_client_secret: str | None = None
+    alpha_vantage_api_key: str | None = None
 
 
 class MarketFeeSettingSummary(BaseModel):

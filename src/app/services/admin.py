@@ -57,7 +57,7 @@ DEFAULT_SCHEDULER_ENTRY = {
 def _derive_news_mode(news_enabled: bool, refresh_minutes: int) -> str:
     if not news_enabled:
         return "shared_off"
-    return f"shared_marketaux_{int(refresh_minutes)}m"
+    return f"shared_hybrid_{int(refresh_minutes)}m"
 
 
 def default_news_collection_policy() -> str:

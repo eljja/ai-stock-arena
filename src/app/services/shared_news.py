@@ -7,7 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import AdminSetting, SharedNewsBatch, SharedNewsItem
-from app.news.marketaux import MarketauxNewsClient, MarketauxNewsItem
+from app.news.alpha_vantage import AlphaVantageNewsClient
+from app.news.marketaux import MarketauxNewsClient
+from app.news.naver import NaverNewsClient
 from app.services.admin import get_runtime_settings, get_scheduler_status
 from app.services.execution_events import create_execution_event
 
@@ -15,7 +17,7 @@ NEWS_STATE_KEY = "shared_news_state"
 DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES = 30
 RECENT_DEDUPE_HOURS = 24
 CONTEXT_LOOKBACK_MINUTES = 60
-DEFAULT_NEWS_MODE = "shared_marketaux_30m"
+DEFAULT_NEWS_MODE = "shared_hybrid_30m"
 DEVELOPMENT_FALLBACK = "development_fallback"
 LIVE_STRICT = "live_strict"
 
@@ -112,29 +114,28 @@ def refresh_shared_news_for_market(session: Session, market_code: str, *, trigge
     )
     session.flush()
 
-    client = MarketauxNewsClient()
     window_end = datetime.now(UTC)
     recent_keys = _recent_news_keys(session, market_code, now=window_end)
-    articles: list[MarketauxNewsItem] = []
     selected_window_label = f"{DEFAULT_NEWS_REFRESH_INTERVAL_MINUTES}m"
-    max_pages = 2 if collection_policy == LIVE_STRICT else 4
+    provider_items: list[object] = []
+    provider_status: list[str] = []
 
     for window_start, window_label in _candidate_news_windows(session, market_code, now=window_end, collection_policy=collection_policy):
-        articles = client.fetch_recent_news(
+        provider_items, provider_status = _collect_news_from_providers(
+            session,
             market_code,
             published_after=window_start,
             published_before=window_end,
-            target_count=3,
-            max_pages=max_pages,
             existing_keys=recent_keys,
             collection_policy=collection_policy,
         )
-        if articles:
+        if provider_items:
             selected_window_label = window_label
             break
 
-    if not articles:
-        message = f"No new unique Marketaux articles for {market_code} in the refresh windows."
+    if not provider_items:
+        detail = '; '.join(provider_status) if provider_status else 'no providers returned items'
+        message = f"No new unique shared news for {market_code} in the refresh windows ({detail})."
         update_shared_news_state(
             session,
             market_code,
@@ -145,7 +146,8 @@ def refresh_shared_news_for_market(session: Session, market_code: str, *, trigge
         create_execution_event(session, event_type="news", target_type="market", market_code=market_code, trigger_source=trigger_source, status="empty", message=message)
         return message
 
-    batch = _store_news_batch(session, market_code, articles, created_at=window_end, window_label=selected_window_label)
+    provider_items.sort(key=lambda item: ((getattr(item, 'published_at', None) or datetime.min.replace(tzinfo=UTC)), float(getattr(item, 'significance_score', 0.0))), reverse=True)
+    batch = _store_news_batch(session, market_code, provider_items[:10], created_at=window_end, window_label=selected_window_label)
     if runtime_settings.get("news_mode") != DEFAULT_NEWS_MODE:
         runtime_settings["news_mode"] = DEFAULT_NEWS_MODE
         setting = session.scalar(select(AdminSetting).where(AdminSetting.key == "runtime_controls"))
@@ -153,7 +155,7 @@ def refresh_shared_news_for_market(session: Session, market_code: str, *, trigge
             setting.value_json = runtime_settings
             setting.updated_at = datetime.now(UTC)
 
-    message = f"Stored {len(articles)} unique Marketaux articles for {market_code} in batch {batch.batch_key} using {selected_window_label} window."
+    message = f"Stored {len(provider_items[:10])} unique shared news items for {market_code} in batch {batch.batch_key} using {selected_window_label} window ({'; '.join(provider_status)})."
     update_shared_news_state(
         session,
         market_code,
@@ -247,6 +249,70 @@ def _candidate_news_windows(session: Session, market_code: str, *, now: datetime
     ]
 
 
+def _collect_news_from_providers(
+    session: Session,
+    market_code: str,
+    *,
+    published_after: datetime,
+    published_before: datetime,
+    existing_keys: set[str],
+    collection_policy: str,
+) -> tuple[list[object], list[str]]:
+    items: list[object] = []
+    status_parts: list[str] = []
+    seen_keys = set(existing_keys)
+
+    def add_items(label: str, fetched: list[object]) -> None:
+        added = 0
+        for item in fetched:
+            key = getattr(item, "dedupe_key", None)
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            items.append(item)
+            added += 1
+        status_parts.append(f"{label}:{added}")
+
+    try:
+        marketaux_items = MarketauxNewsClient().fetch_recent_news(
+            market_code,
+            published_after=published_after,
+            published_before=published_before,
+            target_count=5,
+            max_pages=2 if collection_policy == LIVE_STRICT else 4,
+            existing_keys=seen_keys,
+            collection_policy=collection_policy,
+        )
+        add_items("marketaux", marketaux_items)
+    except Exception as exc:
+        status_parts.append(f"marketaux_error:{exc.__class__.__name__}")
+
+    if market_code.upper() == "KR":
+        try:
+            naver_items = NaverNewsClient().fetch_recent_news(
+                published_after=published_after,
+                published_before=published_before,
+                target_count=5,
+                existing_keys=seen_keys,
+            )
+            add_items("naver", naver_items)
+        except Exception as exc:
+            status_parts.append(f"naver_error:{exc.__class__.__name__}")
+    elif market_code.upper() == "US":
+        try:
+            alpha_items = AlphaVantageNewsClient().fetch_recent_news(
+                published_after=published_after,
+                published_before=published_before,
+                target_count=5,
+                existing_keys=seen_keys,
+            )
+            add_items("alpha_vantage", alpha_items)
+        except Exception as exc:
+            status_parts.append(f"alpha_vantage_error:{exc.__class__.__name__}")
+
+    return items, status_parts
+
+
 def _recent_news_keys(session: Session, market_code: str, *, now: datetime) -> set[str]:
     threshold = now - timedelta(hours=RECENT_DEDUPE_HOURS)
     rows = session.scalars(
@@ -257,13 +323,13 @@ def _recent_news_keys(session: Session, market_code: str, *, now: datetime) -> s
     return {_row_key(row) for row in rows}
 
 
-def _store_news_batch(session: Session, market_code: str, articles: list[MarketauxNewsItem], *, created_at: datetime, window_label: str) -> SharedNewsBatch:
-    batch_key = f"marketaux:{market_code}:{created_at.strftime('%Y%m%dT%H%M%S')}"
+def _store_news_batch(session: Session, market_code: str, articles: list[object], *, created_at: datetime, window_label: str) -> SharedNewsBatch:
+    batch_key = f"hybrid:{market_code}:{created_at.strftime('%Y%m%dT%H%M%S')}"
     batch = SharedNewsBatch(
         batch_key=batch_key,
         market_code=market_code,
-        source="marketaux",
-        summary=f"{len(articles)} unique items collected for {market_code} using the {window_label} refresh window.",
+        source="hybrid",
+        summary=f"{len(articles)} unique items collected for {market_code} using the {window_label} refresh window from the configured hybrid providers.",
         is_active=True,
         created_at=created_at,
     )
