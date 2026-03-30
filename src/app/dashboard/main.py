@@ -625,13 +625,17 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
     news_mode = "OFF" if not settings_payload.get("news_enabled", False) else f"HYBRID {refresh_minutes}M"
     news_policy = str(settings_payload.get("news_collection_policy", "development_fallback")).replace("_", " ").title()
     news_rows = _news_preview_rows(news_batches, limit=20)
+    current_utc = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC")
     st.markdown(
         f"""
         <section class="asa-hero">
             <div class="asa-eyebrow">Pure Model Benchmark</div>
-            <div style="display:flex; align-items:flex-end; gap:14px; flex-wrap:wrap;">
-                <h1 class="asa-headline">AI Stock Arena</h1>
-                <div class="asa-signature">eljja1@gmail.com</div>
+            <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:14px; flex-wrap:wrap;">
+                <div style="display:flex; align-items:flex-end; gap:14px; flex-wrap:wrap;">
+                    <h1 class="asa-headline">AI Stock Arena</h1>
+                    <div class="asa-signature">eljja1@gmail.com</div>
+                </div>
+                <div class="asa-signature">{html.escape(current_utc)}</div>
             </div>
             <div class="asa-subhead">Rank LLMs by fee-adjusted return, drawdown, and execution cost. Same markets, same cadence, same rules.</div>
             <div class="asa-hero-grid">
@@ -773,7 +777,7 @@ def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models:
         y=alt.Y(f"{metric_name}:Q", title=metric_name.replace("_", " ").title(), scale=alt.Scale(domain=y_domain, zero=False)),
         color=alt.Color(
             "model_id:N",
-            legend=_adaptive_bottom_legend(label_limit=240, symbol_limit=model_count),
+            legend=None,
             scale=color_scale,
         ),
         tooltip=[
@@ -785,8 +789,10 @@ def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models:
     )
     if chart_df["market_code"].nunique() > 1:
         base = base.encode(strokeDash=alt.StrokeDash("market_code:N", legend=None))
-    line = base.mark_line(strokeWidth=2.4).encode(opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)))
-    points = base.mark_point(size=56, filled=True).encode(opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)))
+    line_opacity = alt.condition(selection, alt.value(1.0), alt.value(0.15)) if legend_selection is not None else alt.value(1.0)
+    point_opacity = alt.condition(selection, alt.value(1.0), alt.value(0.15)) if legend_selection is not None else alt.value(1.0)
+    line = base.mark_line(strokeWidth=2.4, interpolate="linear").encode(opacity=line_opacity)
+    points = base.mark_point(size=56, filled=True).encode(opacity=point_opacity)
     chart = (line + points).properties(height=260)
     if x_zoom is not None:
         chart = chart.add_params(x_zoom)
@@ -814,15 +820,16 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
     color_scale = _model_color_scale(selected_models or grouped["model_id"].dropna().tolist())
     selection = legend_selection or _legend_highlight_selection("model_id")
     y_domain = _padded_domain(grouped["value"])
+    line_opacity = alt.condition(selection, alt.value(1.0), alt.value(0.15)) if legend_selection is not None else alt.value(1.0)
     chart = (
         alt.Chart(grouped)
-        .mark_line(point=True, strokeWidth=2.2)
+        .mark_line(point=True, strokeWidth=2.2, interpolate="linear")
         .encode(
             x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
             y=alt.Y("value:Q", title="Buy / sell notional", scale=alt.Scale(domain=y_domain, zero=False)),
             color=alt.Color("model_id:N", scale=color_scale, legend=None),
             strokeDash=alt.StrokeDash("metric:N", legend=None, sort=["Buy", "Sell"]),
-            opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)),
+            opacity=line_opacity,
             tooltip=[
                 alt.Tooltip("model_id:N", title="Model"),
                 alt.Tooltip("metric:N", title="Metric"),
@@ -876,15 +883,16 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
     color_scale = _model_color_scale(selected_models or cost_df["model_id"].dropna().tolist())
     selection = legend_selection or _legend_highlight_selection("model_id")
     y_domain = _padded_domain(cost_df["value"])
+    line_opacity = alt.condition(selection, alt.value(1.0), alt.value(0.15)) if legend_selection is not None else alt.value(1.0)
     chart = (
         alt.Chart(cost_df)
-        .mark_line(point=True, strokeWidth=2.2)
+        .mark_line(point=True, strokeWidth=2.2, interpolate="linear")
         .encode(
             x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
             y=alt.Y("value:Q", title="Overhead", scale=alt.Scale(domain=y_domain, zero=False)),
             color=alt.Color("model_id:N", scale=color_scale, legend=None),
             strokeDash=alt.StrokeDash("metric:N", legend=None, sort=["Trade overhead", "LLM overhead"]),
-            opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)),
+            opacity=line_opacity,
             tooltip=[
                 alt.Tooltip("model_id:N", title="Model"),
                 alt.Tooltip("metric:N", title="Metric"),
@@ -1098,7 +1106,22 @@ with performance_tab:
     st.markdown('<div class="asa-section-label">Trajectory</div>', unsafe_allow_html=True)
     metric_name = st.selectbox("Chart metric", ["total_return_pct", "total_equity"], index=0)
     performance_market = st.selectbox("Performance market", ["All", "KR", "US"], index=0)
-    performance_models = st.multiselect("Legend models", chosen_models or model_options, default=(chosen_models or model_options))
+    performance_default_models = chosen_models or model_options
+    if hasattr(st, "pills"):
+        performance_models = st.pills(
+            "Legend models",
+            model_options,
+            default=performance_default_models,
+            selection_mode="multi",
+            key="performance_legend_models",
+        ) or []
+    else:
+        performance_models = st.multiselect(
+            "Legend models",
+            model_options,
+            default=performance_default_models,
+            key="performance_legend_models_fallback",
+        )
     if snapshots_df.empty:
         st.info("No performance snapshots found.")
     else:
@@ -1112,17 +1135,16 @@ with performance_tab:
         else:
             chart_df["created_at"] = pd.to_datetime(chart_df["created_at"])
             x_zoom = alt.selection_interval(encodings=["x"], bind="scales")
-            legend_selection = alt.selection_point(fields=["model_id"], bind="legend")
-            charts = [performance_chart(chart_df, metric_name, performance_models, x_zoom=x_zoom, legend_selection=legend_selection)]
-            buy_sell = buy_sell_chart(trades_df, performance_market, performance_models, x_zoom=x_zoom, legend_selection=legend_selection)
+            charts = [performance_chart(chart_df, metric_name, performance_models, x_zoom=x_zoom, legend_selection=None)]
+            buy_sell = buy_sell_chart(trades_df, performance_market, performance_models, x_zoom=x_zoom, legend_selection=None)
             if buy_sell is not None:
                 st.markdown("**Buy / Sell:** Solid line = Buy, dashed line = Sell.")
                 charts.append(buy_sell)
-            overhead = overhead_chart(trades_df, logs_all_df, performance_market, performance_models, x_zoom=x_zoom, legend_selection=legend_selection)
+            overhead = overhead_chart(trades_df, logs_all_df, performance_market, performance_models, x_zoom=x_zoom, legend_selection=None)
             if overhead is not None:
                 st.markdown("**Overhead:** Solid line = Trade overhead, dashed line = LLM overhead.")
                 charts.append(overhead)
-            performance_bundle = _apply_chart_theme(alt.vconcat(*charts, spacing=18).add_params(legend_selection, x_zoom))
+            performance_bundle = _apply_chart_theme(alt.vconcat(*charts, spacing=18).add_params(x_zoom))
             chart_col, _ = st.columns([5, 1])
             chart_col.altair_chart(performance_bundle, use_container_width=True)
 
