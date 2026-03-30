@@ -719,6 +719,13 @@ def _legend_highlight_selection(field_name: str) -> alt.SelectionParameter:
     return alt.selection_point(fields=[field_name], bind="legend")
 
 
+def _adaptive_bottom_legend(*, label_limit: int = 220, symbol_limit: int | None = None) -> alt.Legend:
+    legend_kwargs = {"orient": "bottom", "direction": "horizontal", "labelLimit": label_limit}
+    if symbol_limit is not None:
+        legend_kwargs["symbolLimit"] = symbol_limit
+    return alt.Legend(**legend_kwargs)
+
+
 def _padded_domain(values: pd.Series, pad_ratio: float = 0.05) -> list[float] | None:
     numeric = pd.to_numeric(values, errors="coerce").dropna()
     if numeric.empty:
@@ -766,7 +773,7 @@ def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models:
         y=alt.Y(f"{metric_name}:Q", title=metric_name.replace("_", " ").title(), scale=alt.Scale(domain=y_domain, zero=False)),
         color=alt.Color(
             "model_id:N",
-            legend=alt.Legend(orient="bottom", columns=min(4, model_count), labelLimit=240, symbolLimit=model_count),
+            legend=_adaptive_bottom_legend(label_limit=240, symbol_limit=model_count),
             scale=color_scale,
         ),
         tooltip=[
@@ -902,7 +909,7 @@ def market_pulse_chart(history_df: pd.DataFrame) -> alt.Chart:
         .encode(
             x=alt.X("as_of:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
             y=alt.Y("return_1h_pct:Q", title="Hourly move %"),
-            color=alt.Color("ticker:N", scale=color_scale, legend=alt.Legend(orient="bottom", columns=min(4, instrument_count), labelLimit=220)),
+            color=alt.Color("ticker:N", scale=color_scale, legend=_adaptive_bottom_legend(label_limit=220, symbol_limit=instrument_count)),
             opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)),
             tooltip=[
                 alt.Tooltip("ticker:N", title="Ticker"),
@@ -1149,9 +1156,10 @@ with market_tab:
         )
         st.markdown("**Latest tracked LLM movers**")
         st.dataframe(
-            latest_rows[["display_name", "current_price", "return_1h_pct", "return_1d_pct", "intraday_volatility_pct", "latest_volume", "is_active"]].rename(
+            latest_rows[["display_name", "ticker", "current_price", "return_1h_pct", "return_1d_pct", "intraday_volatility_pct", "latest_volume", "is_active"]].rename(
                 columns={
                     "display_name": "Instrument",
+                    "ticker": "Ticker",
                     "current_price": "Price",
                     "return_1h_pct": "1h %",
                     "return_1d_pct": "1d %",
@@ -1168,9 +1176,10 @@ with market_tab:
         st.caption("No tracked instruments for this market yet.")
     else:
         st.dataframe(
-            instrument_registry[["display_name", "is_active", "first_seen_at", "last_seen_at", "delisted_at"]].rename(
+            instrument_registry[["display_name", "ticker", "is_active", "first_seen_at", "last_seen_at", "delisted_at"]].rename(
                 columns={
                     "display_name": "Instrument",
+                    "ticker": "Ticker",
                     "is_active": "Active",
                     "first_seen_at": "First seen",
                     "last_seen_at": "Last seen",
@@ -1503,7 +1512,7 @@ with admin_tab:
                         st.rerun()
 
         st.markdown("**Manual actions**")
-        action_cols = st.columns(2)
+        action_cols = st.columns(3)
         if action_cols[0].button("Refresh shared news now"):
             if api_base_url:
                 with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=120.0) as client:
@@ -1521,6 +1530,19 @@ with admin_tab:
             else:
                 with SessionLocal() as session:
                     result = {"messages": run_manual_trade_cycles(session)}
+            st.session_state["admin_action_messages"] = result.get("messages", [])
+            refresh_all()
+            st.rerun()
+        if action_cols[2].button("Disable paid free/experiment APIs"):
+            if api_base_url:
+                with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=120.0) as client:
+                    result = client.post("/admin/models/cleanup-free-pricing", headers={"X-Admin-Token": current_admin_token}).json()
+            else:
+                with SessionLocal() as session:
+                    from app.services.admin import disable_nonzero_cost_free_experiment_models
+
+                    result = {"messages": disable_nonzero_cost_free_experiment_models(session)}
+                    session.commit()
             st.session_state["admin_action_messages"] = result.get("messages", [])
             refresh_all()
             st.rerun()

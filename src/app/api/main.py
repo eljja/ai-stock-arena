@@ -56,6 +56,7 @@ from app.db.session import get_session
 from app.services.admin import (
     create_or_update_model_profile,
     delete_model_profile,
+    disable_nonzero_cost_free_experiment_models,
     list_market_fee_settings,
     reset_simulation,
     run_manual_news_refreshes,
@@ -369,6 +370,16 @@ def admin_run_trades(
     session: Session = Depends(get_session),
 ) -> AdminActionResponse:
     messages = run_manual_trade_cycles(session=session, market_code=market_code.upper() if market_code else None)
+    return AdminActionResponse(messages=messages)
+
+
+@app.post("/admin/models/cleanup-free-pricing", response_model=AdminActionResponse)
+def admin_cleanup_free_pricing(
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> AdminActionResponse:
+    messages = disable_nonzero_cost_free_experiment_models(session=session)
+    session.commit()
     return AdminActionResponse(messages=messages)
 
 

@@ -691,7 +691,8 @@ def _pricing_label(model: LLMModel) -> str:
 def _infer_is_free_like(model: LLMModel) -> bool:
     prompt = model.prompt_price_per_million or 0.0
     completion = model.completion_price_per_million or 0.0
-    return model.model_id.endswith(":free") or (prompt == 0.0 and completion == 0.0)
+    lowered = model.model_id.lower()
+    return lowered.endswith((":free", ":free:online", ":experiment", ":experiment:online", ":experimental", ":experimental:online")) or (prompt == 0.0 and completion == 0.0)
 
 
 def _market_map(session: Session) -> dict[str, str]:

@@ -354,7 +354,8 @@ def create_or_update_model_profile(
             "base_model_id": request_model_id.replace(":online", ""),
             "search_mode": search_mode,
             "pricing_label": _pricing_label(prompt_price_per_million, completion_price_per_million),
-            "is_free_like": bool(request_model_id.endswith(":free") or request_model_id.endswith(":free:online")),
+            "is_free_like": _is_openrouter_free_or_experiment_request(request_model_id)
+            or ((prompt_price_per_million or 0.0) == 0.0 and (completion_price_per_million or 0.0) == 0.0),
             "custom_prompt": (custom_prompt or "").strip() or None,
             "api_enabled": bool(api_enabled),
         }
@@ -399,7 +400,7 @@ def update_model_runtime(
         if api_enabled:
             metadata.pop("auto_disabled_inactive", None)
             metadata.pop("inactive_since", None)
-            if str(metadata.get("status_note") or "").startswith("Auto-disabled after"):
+            if str(metadata.get("status_note") or "").startswith("Auto-disabled after") or str(metadata.get("status_note") or "").startswith("Disabled because free/experiment"):
                 metadata.pop("status_note", None)
     if custom_prompt is not None:
         metadata["custom_prompt"] = custom_prompt.strip() or None
@@ -417,6 +418,57 @@ def update_model_runtime(
 def is_model_api_enabled(model: LLMModel) -> bool:
     metadata = model.metadata_json or {}
     return bool(metadata.get("api_enabled", True))
+
+
+def _is_openrouter_free_or_experiment_request(model_id: str | None) -> bool:
+    normalized = str(model_id or "").lower()
+    return normalized.endswith(
+        (
+            ":free",
+            ":free:online",
+            ":experiment",
+            ":experiment:online",
+            ":experimental",
+            ":experimental:online",
+        )
+    )
+
+
+def disable_nonzero_cost_free_experiment_models(session: Session) -> list[str]:
+    messages: list[str] = []
+    disabled_count = 0
+    stmt = select(LLMModel).order_by(LLMModel.model_id)
+    for model in session.scalars(stmt).all():
+        metadata = model.metadata_json or {}
+        request_model_id = str(metadata.get("request_model_id") or model.model_id)
+        if not _is_openrouter_free_or_experiment_request(request_model_id):
+            continue
+        prompt_cost = float(model.prompt_price_per_million or 0.0)
+        completion_cost = float(model.completion_price_per_million or 0.0)
+        if prompt_cost <= 0.0 and completion_cost <= 0.0:
+            continue
+        if not bool(metadata.get("api_enabled", True)):
+            continue
+        metadata["api_enabled"] = False
+        metadata["status_note"] = "Disabled because free/experiment token pricing is non-zero. Re-enable manually if you still want to use it."
+        model.metadata_json = metadata
+        model.updated_at = datetime.now(UTC)
+        disabled_count += 1
+        create_execution_event(
+            session,
+            event_type="model",
+            target_type="model",
+            model_id=model.model_id,
+            trigger_source="manual_admin",
+            status="disabled",
+            code="NONZERO_FREE_PRICING",
+            message=f"Disabled API use because prompt=${prompt_cost:.4f}/1M and completion=${completion_cost:.4f}/1M.",
+        )
+        messages.append(f"Disabled {model.model_id}: prompt=${prompt_cost:.4f}/1M, completion=${completion_cost:.4f}/1M")
+    if disabled_count == 0:
+        messages.append("No free/experiment models with non-zero token pricing were enabled.")
+    session.flush()
+    return messages
 
 
 def delete_model_profile(session: Session, profile_id: str) -> dict[str, int]:
