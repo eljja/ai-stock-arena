@@ -109,9 +109,6 @@ class MarketauxNewsClient:
         return payload
 
     def _request_variants(self, market_code: str, collection_policy: str) -> list[dict[str, str]]:
-        market_code = market_code.upper()
-        if market_code not in {"US", "KR"}:
-            raise ValueError(f"Unsupported market code for Marketaux: {market_code}")
         # Intentionally unfiltered per user request: no country, language, search, or entity restrictions.
         return [{"sort": "published_at", "sort_order": "desc"}]
 

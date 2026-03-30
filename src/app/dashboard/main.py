@@ -621,9 +621,6 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
         leader = rankings_df.sort_values(by=["current_return_pct"], ascending=False, na_position="last").iloc[0]
         leader_name = html.escape(str(leader.get("display_name") or leader.get("model_id")))
         leader_return = _pct(leader.get("current_return_pct"))
-    refresh_minutes = int(settings_payload.get("news_refresh_interval_minutes", 30) or 30)
-    news_mode = "OFF" if not settings_payload.get("news_enabled", False) else "PROVIDERS 15M/30M"
-    news_policy = str(settings_payload.get("news_collection_policy", "development_fallback")).replace("_", " ").title()
     news_rows = _news_preview_rows(news_batches, limit=20)
     current_utc = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC")
     st.markdown(
@@ -650,7 +647,6 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
                             <div class="asa-stat-label">Shared News Preview</div>
                             <div class="asa-news-title">Latest normalized headlines for the benchmark feed</div>
                         </div>
-                        <div class="asa-news-subtitle">Mode: {html.escape(news_mode)} | Policy: {html.escape(news_policy)}</div>
                     </div>
                     <div class="asa-news-list">{news_rows}</div>
                 </div>
@@ -1049,6 +1045,7 @@ settings_payload = payload["settings"] or {
     "news_mode": "shared_off",
     "news_collection_policy": "development_fallback",
     "news_refresh_interval_minutes": 30,
+    "news_dedup_enabled": False,
     "fx_rates": {"USDKRW": 1500.0},
 }
 scheduler_payload = payload.get("scheduler") or {"markets": []}
@@ -1421,23 +1418,17 @@ with admin_tab:
         )
         admin_secrets = load_admin_secrets(api_base_url or None, current_admin_token)
         news_provider_flags = {**{"marketaux": True, "naver": True, "alpha_vantage": True}, **(settings_payload.get("news_providers", {}) or {})}
-        runtime_cols = st.columns([1.05, 1.05, 1.35, 0.9])
+        runtime_cols = st.columns([0.95, 0.95, 1.15, 0.85, 0.9])
         runtime_cols[0].metric("Trade cadence", f"{int(settings_payload.get('decision_interval_minutes', 60))} min")
         runtime_cols[1].metric("News refresh cadence", f"{int(settings_payload.get('news_refresh_interval_minutes', 30))} min")
         runtime_cols[2].metric("News policy", str(settings_payload.get("news_collection_policy", "development_fallback")))
-        runtime_cols[3].metric("USD/KRW", f"{_normalize_fx_rates(settings_payload.get('fx_rates')).get('USDKRW', 1500.0):,.0f}")
+        runtime_cols[3].metric("News dedupe", "ON" if bool(settings_payload.get("news_dedup_enabled", False)) else "OFF")
+        runtime_cols[4].metric("USD/KRW", f"{_normalize_fx_rates(settings_payload.get('fx_rates')).get('USDKRW', 1500.0):,.0f}")
 
-        market_state_map = {
-            row.get("market_code"): row
-            for _, row in scheduler_admin_df.iterrows()
-        } if not scheduler_admin_df.empty else {}
-
-        def provider_row(provider_key: str, label: str, cadence_label: str, status_market_codes: list[str], secret_keys: list[str], event_code: str) -> dict:
+        def provider_row(provider_key: str, label: str, cadence_label: str, secret_keys: list[str], event_code: str) -> dict:
             provider_events = execution_events_df.copy()
             if not provider_events.empty:
                 provider_events = provider_events[(provider_events["event_type"] == "news") & (provider_events["code"] == event_code)]
-                if status_market_codes:
-                    provider_events = provider_events[provider_events["market_code"].isin(status_market_codes)]
                 provider_events = provider_events.sort_values("created_at", ascending=False)
             latest_event = provider_events.iloc[0] if not provider_events.empty else None
             return {
@@ -1452,9 +1443,9 @@ with admin_tab:
             }
 
         provider_rows = [
-            provider_row("marketaux", "Marketaux", "15 min / 3 items", ["KR", "US"], ["marketaux_api_token"], "MARKETAUX"),
-            provider_row("naver", "Naver", "30 min / 5 items", ["KR"], ["naver_client_id", "naver_client_secret"], "NAVER"),
-            provider_row("alpha_vantage", "Alpha Vantage", "30 min / 5 items", ["US"], ["alpha_vantage_api_key"], "ALPHA_VANTAGE"),
+            provider_row("marketaux", "Marketaux", "15 min / 3 items", ["marketaux_api_token"], "MARKETAUX"),
+            provider_row("naver", "Naver", "30 min / 5 items", ["naver_client_id", "naver_client_secret"], "NAVER"),
+            provider_row("alpha_vantage", "Alpha Vantage", "30 min / 5 items", ["alpha_vantage_api_key"], "ALPHA_VANTAGE"),
         ]
         st.dataframe(pd.DataFrame(provider_rows), use_container_width=True, hide_index=True)
 
@@ -1499,6 +1490,7 @@ with admin_tab:
             news_provider_marketaux = st.checkbox("Enable Marketaux", value=bool(news_provider_flags.get("marketaux", True)))
             news_provider_naver = st.checkbox("Enable Naver", value=bool(news_provider_flags.get("naver", True)))
             news_provider_alpha = st.checkbox("Enable Alpha Vantage", value=bool(news_provider_flags.get("alpha_vantage", True)))
+            news_dedup_enabled = st.checkbox("Exclude duplicate news items", value=bool(settings_payload.get("news_dedup_enabled", False)), help="Turn this off to store every returned article while validating provider behavior.")
             st.caption("News providers run on the configured cadence across the full day. Trade runtime windows remain KR/US specific below.")
             st.markdown("**Trade runtime windows (UTC)**")
             kr_window = market_windows.get("KR", {})
@@ -1519,6 +1511,7 @@ with admin_tab:
                         "naver": news_provider_naver,
                         "alpha_vantage": news_provider_alpha,
                     },
+                    "news_dedup_enabled": news_dedup_enabled,
                     "fx_rates": {"USDKRW": float(usdkrw_rate)},
                     "markets": {
                         "KR": {

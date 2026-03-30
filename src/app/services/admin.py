@@ -43,6 +43,7 @@ DEFAULT_RUNTIME_SETTINGS = {
     "news_collection_policy": "development_fallback",
     "news_refresh_interval_minutes": 30,
     "news_providers": {"marketaux": True, "naver": True, "alpha_vantage": True},
+    "news_dedup_enabled": False,
     "fx_rates": {"USDKRW": 1500.0},
 }
 
@@ -81,6 +82,7 @@ def get_runtime_settings(session: Session) -> dict:
     value["news_collection_policy"] = value.get("news_collection_policy") or default_news_collection_policy()
     value["news_mode"] = _derive_news_mode(bool(value.get("news_enabled", False)), int(value.get("news_refresh_interval_minutes") or 30))
     value["news_providers"] = {**DEFAULT_RUNTIME_SETTINGS.get("news_providers", {}), **(value.get("news_providers", {}))}
+    value["news_dedup_enabled"] = bool(value.get("news_dedup_enabled", DEFAULT_RUNTIME_SETTINGS.get("news_dedup_enabled", False)))
     value["fx_rates"] = {**DEFAULT_RUNTIME_SETTINGS.get("fx_rates", {}), **(value.get("fx_rates", {}))}
     value["fx_rates"]["USDKRW"] = float(value["fx_rates"].get("USDKRW") or 1500.0)
     markets = {**DEFAULT_RUNTIME_SETTINGS.get("markets", {}), **(value.get("markets", {}))}
@@ -110,6 +112,7 @@ def update_runtime_settings(session: Session, payload: dict) -> dict:
     merged["news_mode"] = _derive_news_mode(bool(merged.get("news_enabled", False)), int(merged.get("news_refresh_interval_minutes") or 30))
     if "news_providers" in payload:
         merged["news_providers"] = {**current.get("news_providers", {}), **payload["news_providers"]}
+    merged["news_dedup_enabled"] = bool(merged.get("news_dedup_enabled", DEFAULT_RUNTIME_SETTINGS.get("news_dedup_enabled", False)))
     if "fx_rates" in payload:
         merged["fx_rates"] = {**current.get("fx_rates", {}), **payload["fx_rates"]}
     merged["fx_rates"] = {**DEFAULT_RUNTIME_SETTINGS.get("fx_rates", {}), **merged.get("fx_rates", {})}
@@ -638,20 +641,17 @@ def update_market_fee_settings(
 
 
 def run_manual_news_refreshes(session: Session, market_code: str | None = None) -> list[str]:
-    from app.services.shared_news import refresh_shared_news_for_market
+    from app.services.shared_news import refresh_shared_news_all
 
-    market_codes = [market_code] if market_code else list_enabled_market_codes(session)
-    messages: list[str] = []
-    for code in market_codes:
-        try:
-            messages.append(refresh_shared_news_for_market(session, code, trigger_source="manual_admin"))
-            session.commit()
-        except Exception as exc:
-            session.rollback()
-            create_execution_event(session, event_type="news", target_type="market", market_code=code, trigger_source="manual_admin", status="error", code=exc.__class__.__name__, message=str(exc))
-            session.commit()
-            messages.append(f"Shared news refresh failed for {code}: {exc}")
-    return messages
+    try:
+        message = refresh_shared_news_all(session, trigger_source="manual_admin")
+        session.commit()
+        return [message]
+    except Exception as exc:
+        session.rollback()
+        create_execution_event(session, event_type="news", target_type="provider", market_code="GLOBAL", trigger_source="manual_admin", status="error", code=exc.__class__.__name__, message=str(exc))
+        session.commit()
+        return [f"Shared news refresh failed: {exc}"]
 
 
 def run_manual_trade_cycles(session: Session, market_code: str | None = None) -> list[str]:
