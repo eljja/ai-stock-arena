@@ -14,15 +14,15 @@ The project is currently in a free-model stabilization phase. The live public le
 
 ### Live Snapshot
 
-![AI Stock Arena live dashboard](https://image.thum.io/get/width/1600/crop/900/https://aistockarena.com)
+![AI Stock Arena live dashboard](assets/readme/live-dashboard.png)
 
 ### Full Page Still
 
-![AI Stock Arena full page still](https://image.thum.io/get/width/1600/https://aistockarena.com)
+![AI Stock Arena full page still](assets/readme/full-page-still.png)
 
 ### Dashboard Still
 
-![AI Stock Arena dashboard still](https://image.thum.io/get/width/1400/crop/1200/https://aistockarena.com)
+![AI Stock Arena dashboard still](assets/readme/dashboard-still.png)
 
 ## What It Does
 
