@@ -741,7 +741,7 @@ def _normalize_fx_rates(raw_rates: dict | None) -> dict[str, float]:
 
 def _market_fx_rate(market_code: str, fx_rates: dict[str, float] | None) -> float:
     rates = _normalize_fx_rates(fx_rates)
-    return rates["USDKRW"] if str(market_code).upper() == "US" else 1.0
+    return 1.0 if str(market_code).upper() == "US" else 1.0 / rates["USDKRW"]
 
 
 def _aggregate_all_market_snapshots(chart_df: pd.DataFrame, fx_rates: dict[str, float] | None = None) -> pd.DataFrame:
@@ -751,29 +751,47 @@ def _aggregate_all_market_snapshots(chart_df: pd.DataFrame, fx_rates: dict[str, 
     work = chart_df.copy()
     work["created_at"] = pd.to_datetime(work["created_at"], errors="coerce")
     work["total_equity"] = pd.to_numeric(work["total_equity"], errors="coerce")
+    work["total_return_pct"] = pd.to_numeric(work["total_return_pct"], errors="coerce")
     work = work.dropna(subset=["created_at", "total_equity"])
     if work.empty:
         return work
-    work["fx_rate"] = work["market_code"].map(lambda market: _market_fx_rate(market, fx_rates))
-    work["total_equity_krw"] = work["total_equity"] * work["fx_rate"]
-    baselines = (
-        work.sort_values("created_at")
-        .groupby(["model_id", "market_code"], as_index=False)
-        .first()[["model_id", "market_code", "total_equity_krw"]]
-    )
-    baseline_map = baselines.groupby("model_id")["total_equity_krw"].sum().to_dict()
     work["bucket"] = work["created_at"].dt.floor("h")
-    latest = work.sort_values("created_at").groupby(["model_id", "market_code", "bucket"], as_index=False).tail(1)
-    combined = latest.groupby(["model_id", "bucket"], as_index=False)["total_equity_krw"].sum()
-    combined["baseline_equity"] = combined["model_id"].map(baseline_map).fillna(0.0)
-    combined["total_return_pct"] = combined.apply(
-        lambda row: ((row["total_equity_krw"] / row["baseline_equity"]) - 1.0) * 100.0 if row["baseline_equity"] else 0.0,
-        axis=1,
-    )
-    combined["market_code"] = "All"
-    combined["created_at"] = combined["bucket"]
-    combined = combined.rename(columns={"total_equity_krw": "total_equity"})
-    return combined[["model_id", "market_code", "created_at", "total_return_pct", "total_equity"]]
+    work["fx_rate"] = work["market_code"].map(lambda market: _market_fx_rate(market, fx_rates))
+    work["total_equity_usd"] = work["total_equity"] * work["fx_rate"]
+
+    frames: list[pd.DataFrame] = []
+    for model_id, model_df in work.groupby("model_id"):
+        buckets = pd.Index(sorted(model_df["bucket"].dropna().unique()))
+        if buckets.empty:
+            continue
+        market_frames: list[pd.DataFrame] = []
+        for market_code, market_df in model_df.groupby("market_code"):
+            latest_market = (
+                market_df.sort_values(["bucket", "created_at"])
+                .groupby("bucket", as_index=False)
+                .tail(1)[["bucket", "total_equity_usd", "total_return_pct"]]
+                .sort_values("bucket")
+                .set_index("bucket")
+                .reindex(buckets)
+                .ffill()
+            )
+            latest_market["market_code"] = market_code
+            latest_market["model_id"] = model_id
+            latest_market = latest_market.reset_index().rename(columns={"index": "bucket"})
+            market_frames.append(latest_market)
+        if not market_frames:
+            continue
+        expanded = pd.concat(market_frames, ignore_index=True)
+        combined = expanded.groupby(["model_id", "bucket"], as_index=False).agg(
+            total_equity=("total_equity_usd", "sum"),
+            total_return_pct=("total_return_pct", "mean"),
+        )
+        combined["market_code"] = "All"
+        combined["created_at"] = combined["bucket"]
+        frames.append(combined[["model_id", "market_code", "created_at", "total_return_pct", "total_equity"]])
+    if not frames:
+        return pd.DataFrame(columns=["model_id", "market_code", "created_at", "total_return_pct", "total_equity"])
+    return pd.concat(frames, ignore_index=True)
 
 
 def _padded_domain(values: pd.Series, pad_ratio: float = 0.05) -> list[float] | None:
@@ -820,7 +838,7 @@ def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models:
     y_domain = _padded_domain(chart_df[metric_name])
     y_title = metric_name.replace("_", " ").title()
     if metric_name == "total_equity" and market_filter == "All":
-        y_title = "Total Equity (KRW equiv.)"
+        y_title = "Total Equity (USD equiv.)"
     base = alt.Chart(chart_df).encode(
         x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
         y=alt.Y(f"{metric_name}:Q", title=y_title, scale=alt.Scale(domain=y_domain, zero=False)),
@@ -878,7 +896,7 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
         .mark_line(point=True, strokeWidth=2.2, interpolate="linear")
         .encode(
             x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
-            y=alt.Y("value:Q", title=("Buy / sell notional (KRW equiv.)" if market_filter == "All" else "Buy / sell notional"), scale=alt.Scale(domain=y_domain, zero=False)),
+            y=alt.Y("value:Q", title=("Buy / sell notional (USD equiv.)" if market_filter == "All" else "Buy / sell notional"), scale=alt.Scale(domain=y_domain, zero=False)),
             color=alt.Color("model_id:N", scale=color_scale, legend=None),
             strokeDash=alt.StrokeDash("metric:N", legend=None, sort=["Buy", "Sell"]),
             opacity=line_opacity,
@@ -946,7 +964,7 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
         .mark_line(point=True, strokeWidth=2.2, interpolate="linear")
         .encode(
             x=alt.X("created_at:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
-            y=alt.Y("value:Q", title=("Overhead (KRW equiv.)" if market_filter == "All" else "Overhead"), scale=alt.Scale(domain=y_domain, zero=False)),
+            y=alt.Y("value:Q", title=("Overhead (USD equiv.)" if market_filter == "All" else "Overhead"), scale=alt.Scale(domain=y_domain, zero=False)),
             color=alt.Color("model_id:N", scale=color_scale, legend=None),
             strokeDash=alt.StrokeDash("metric:N", legend=None, sort=["Trade overhead", "LLM overhead"]),
             opacity=line_opacity,
@@ -1019,7 +1037,7 @@ if "dashboard_admin_token" not in st.session_state:
 if "dashboard_models" not in st.session_state:
     st.session_state["dashboard_models"] = []
 if "dashboard_auto_refresh" not in st.session_state:
-    st.session_state["dashboard_auto_refresh"] = False
+    st.session_state["dashboard_auto_refresh"] = True
 if "dashboard_execution_event_limit" not in st.session_state:
     st.session_state["dashboard_execution_event_limit"] = 30
 
@@ -1043,7 +1061,6 @@ settings_payload = payload["settings"] or {
     },
     "news_enabled": False,
     "news_mode": "shared_off",
-    "news_collection_policy": "development_fallback",
     "news_refresh_interval_minutes": 30,
     "news_dedup_enabled": False,
     "fx_rates": {"USDKRW": 1500.0},
@@ -1277,8 +1294,6 @@ with news_tab:
     st.markdown('<div class="asa-section-label">Shared News</div>', unsafe_allow_html=True)
     if not settings_payload.get("news_enabled", False):
         st.markdown('<div class="asa-warning">Shared news is disabled. This league is running as a pure model benchmark with no external news context.</div>', unsafe_allow_html=True)
-    else:
-        st.caption(f"Collection policy: {settings_payload.get('news_collection_policy', 'development_fallback')}")
     if not news_batches:
         st.caption("No shared news batches stored yet.")
     for batch in news_batches:
@@ -1418,12 +1433,11 @@ with admin_tab:
         )
         admin_secrets = load_admin_secrets(api_base_url or None, current_admin_token)
         news_provider_flags = {**{"marketaux": True, "naver": True, "alpha_vantage": True}, **(settings_payload.get("news_providers", {}) or {})}
-        runtime_cols = st.columns([0.95, 0.95, 1.15, 0.85, 0.9])
+        runtime_cols = st.columns([1.05, 1.05, 0.85, 0.9])
         runtime_cols[0].metric("Trade cadence", f"{int(settings_payload.get('decision_interval_minutes', 60))} min")
         runtime_cols[1].metric("News refresh cadence", f"{int(settings_payload.get('news_refresh_interval_minutes', 30))} min")
-        runtime_cols[2].metric("News policy", str(settings_payload.get("news_collection_policy", "development_fallback")))
-        runtime_cols[3].metric("News dedupe", "ON" if bool(settings_payload.get("news_dedup_enabled", False)) else "OFF")
-        runtime_cols[4].metric("USD/KRW", f"{_normalize_fx_rates(settings_payload.get('fx_rates')).get('USDKRW', 1500.0):,.0f}")
+        runtime_cols[2].metric("News dedupe", "ON" if bool(settings_payload.get("news_dedup_enabled", False)) else "OFF")
+        runtime_cols[3].metric("USD/KRW", f"{_normalize_fx_rates(settings_payload.get('fx_rates')).get('USDKRW', 1500.0):,.0f}")
 
         def provider_row(provider_key: str, label: str, cadence_label: str, secret_keys: list[str], event_code: str) -> dict:
             provider_events = execution_events_df.copy()
@@ -1480,12 +1494,6 @@ with admin_tab:
                 format_func=lambda value: dict(WEEKDAY_OPTIONS)[value],
             )
             news_enabled = st.checkbox("Enable shared news", value=bool(settings_payload.get("news_enabled", False)))
-            news_collection_policy = st.selectbox(
-                "News collection policy",
-                ["development_fallback", "live_strict"],
-                index=0 if str(settings_payload.get("news_collection_policy", "development_fallback")) == "development_fallback" else 1,
-                help="development_fallback keeps wider backfill windows. live_strict stays on the current refresh window only.",
-            )
             st.markdown("**News providers**")
             news_provider_marketaux = st.checkbox("Enable Marketaux", value=bool(news_provider_flags.get("marketaux", True)))
             news_provider_naver = st.checkbox("Enable Naver", value=bool(news_provider_flags.get("naver", True)))
@@ -1504,7 +1512,6 @@ with admin_tab:
                     "decision_interval_minutes": cadence,
                     "active_weekdays": sorted(active_weekdays),
                     "news_enabled": news_enabled,
-                    "news_collection_policy": news_collection_policy,
                     "news_refresh_interval_minutes": news_refresh_interval,
                     "news_providers": {
                         "marketaux": news_provider_marketaux,
