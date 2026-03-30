@@ -607,8 +607,24 @@ def _serialize_model(model: LLMModel) -> ModelSummary:
         probe_detail=metadata.get("probe_detail"),
         custom_prompt=custom_prompt,
         uses_custom_prompt=bool(custom_prompt),
+        status_note=metadata.get("status_note"),
+        last_active_at=_deserialize_metadata_datetime(metadata.get("last_active_at")),
         updated_at=model.updated_at,
     )
+
+
+
+
+def _deserialize_metadata_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _serialize_trade(trade: Trade) -> TradeSummary:

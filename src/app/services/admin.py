@@ -396,6 +396,11 @@ def update_model_runtime(
         model.is_selected = is_selected
     if api_enabled is not None:
         metadata["api_enabled"] = bool(api_enabled)
+        if api_enabled:
+            metadata.pop("auto_disabled_inactive", None)
+            metadata.pop("inactive_since", None)
+            if str(metadata.get("status_note") or "").startswith("Auto-disabled after"):
+                metadata.pop("status_note", None)
     if custom_prompt is not None:
         metadata["custom_prompt"] = custom_prompt.strip() or None
     model.metadata_json = metadata

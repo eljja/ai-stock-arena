@@ -26,6 +26,8 @@ class ModelSummary(BaseModel):
     probe_detail: str | None
     custom_prompt: str | None
     uses_custom_prompt: bool
+    status_note: str | None = None
+    last_active_at: datetime | None = None
     updated_at: datetime
 
 

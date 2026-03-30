@@ -4,7 +4,7 @@ import typer
 
 from app.db.session import SessionLocal
 from app.llm.openrouter import OpenRouterClient
-from app.services.bootstrap import create_schema, probe_and_add_free_models, probe_and_select_free_models
+from app.services.bootstrap import create_schema, probe_and_add_all_free_models, probe_and_add_free_models, probe_and_select_free_models
 
 cli = typer.Typer(add_completion=False)
 
@@ -81,6 +81,30 @@ def add_free_models(
         typer.echo(f"- ADDED {result.model_id} | {result.detail}")
     if failures:
         typer.echo("Failed free models:")
+        for result in failures:
+            typer.echo(f"- {result.model_id} | {result.detail}")
+
+
+@cli.command()
+def sync_free_models(
+    candidate_limit: int = 250,
+    sort_by: str = "popular",
+) -> None:
+    create_schema()
+    with SessionLocal() as session:
+        results = probe_and_add_all_free_models(
+            session,
+            candidate_limit=candidate_limit,
+            sort_by=sort_by,
+        )
+
+    successes = [result for result in results if result.success]
+    failures = [result for result in results if not result.success]
+    typer.echo(f"Free/experiment models added: {len(successes)}")
+    for result in successes:
+        typer.echo(f"- ADDED {result.model_id} | {result.detail}")
+    if failures:
+        typer.echo("Failed models:")
         for result in failures:
             typer.echo(f"- {result.model_id} | {result.detail}")
 

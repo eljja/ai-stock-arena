@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config.loader import load_runtime_config, load_settings, parse_default_model_ids
 from app.db.base import Base
-from app.db.models import LLMModel, MarketSetting, ModelMarketPrompt, Portfolio
+from app.db.models import AdminSetting, LLMDecisionLog, LLMModel, MarketSetting, ModelMarketPrompt, Portfolio, RunRequest
 from app.db.session import engine
 from app.llm.openrouter import OpenRouterClient, OpenRouterModel
-from app.services.admin import create_or_update_model_profile, get_runtime_settings
+from app.services.admin import create_or_update_model_profile, get_runtime_settings, is_model_api_enabled
+from app.services.execution_events import create_execution_event
+
+FREE_MODEL_SYNC_STATE_KEY = "free_model_sync_state"
+INACTIVE_MODEL_DAYS = 5
 
 MARKET_LABELS = {
     "KR": "Korea Equity Market",
@@ -124,6 +130,33 @@ def probe_and_add_free_models(
     candidate_limit: int = 40,
     sort_by: str = "popular",
 ) -> list[ModelProbeResult]:
+    return _probe_and_add_candidate_models(
+        session,
+        additional_count=additional_count,
+        candidate_limit=candidate_limit,
+        sort_by=sort_by,
+    )
+
+
+def probe_and_add_all_free_models(
+    session: Session,
+    candidate_limit: int = 250,
+    sort_by: str = "popular",
+) -> list[ModelProbeResult]:
+    return _probe_and_add_candidate_models(
+        session,
+        additional_count=None,
+        candidate_limit=candidate_limit,
+        sort_by=sort_by,
+    )
+
+
+def _probe_and_add_candidate_models(
+    session: Session,
+    additional_count: int | None,
+    candidate_limit: int,
+    sort_by: str,
+) -> list[ModelProbeResult]:
     client = OpenRouterClient()
     raw_catalog = client.catalog(sort_by=sort_by, free_mode="only")
     deduped_catalog: list[OpenRouterModel] = []
@@ -176,13 +209,16 @@ def probe_and_add_free_models(
                 "probe_detail": detail,
                 "is_free_like": external_model.is_free_like,
                 "pricing_label": external_model.pricing_label,
+                "status_note": metadata.get("status_note") if not metadata.get("auto_disabled_inactive") else None,
             })
+            metadata.pop("auto_disabled_inactive", None)
+            metadata.pop("inactive_since", None)
             model_record.metadata_json = metadata
             model_record.is_available = True
             model_record.is_selected = True
         results.append(ModelProbeResult(external_model.model_id, success, detail))
         added_count += 1
-        if added_count >= additional_count:
+        if additional_count is not None and added_count >= additional_count:
             break
 
     session.flush()
@@ -323,3 +359,94 @@ def _default_meta_prompt(market_code: str) -> str:
         "Return a production-ready prompt that will later be used for hourly virtual trading decisions."
     )
 
+
+
+
+def run_weekly_free_model_sync_if_due(session: Session, *, candidate_limit: int = 250, sort_by: str = "popular") -> list[str]:
+    runtime_config = load_runtime_config()
+    local_now = datetime.now(UTC).astimezone(ZoneInfo(runtime_config.app.timezone))
+    if local_now.weekday() != 6:
+        return []
+
+    state = session.scalar(select(AdminSetting).where(AdminSetting.key == FREE_MODEL_SYNC_STATE_KEY))
+    state_value = state.value_json if state is not None and isinstance(state.value_json, dict) else {}
+    local_date = local_now.date().isoformat()
+    if state_value.get("last_run_date") == local_date:
+        return []
+
+    try:
+        results = probe_and_add_all_free_models(session, candidate_limit=candidate_limit, sort_by=sort_by)
+        successes = [result for result in results if result.success]
+        failures = [result for result in results if not result.success]
+        message = f"Sunday free/experiment sync added {len(successes)} model(s); failures={len(failures)}."
+        payload = {"last_run_date": local_date, "last_status": "success", "last_message": message}
+        if state is None:
+            state = AdminSetting(key=FREE_MODEL_SYNC_STATE_KEY, value_json=payload)
+            session.add(state)
+        else:
+            state.value_json = payload
+            state.updated_at = datetime.now(UTC)
+        create_execution_event(session, event_type="model_sync", target_type="catalog", trigger_source="scheduler", status="success", message=message)
+        session.flush()
+        return [message]
+    except Exception as exc:
+        message = f"Sunday free/experiment sync failed: {exc}"
+        payload = {"last_run_date": local_date, "last_status": "error", "last_message": message}
+        if state is None:
+            state = AdminSetting(key=FREE_MODEL_SYNC_STATE_KEY, value_json=payload)
+            session.add(state)
+        else:
+            state.value_json = payload
+            state.updated_at = datetime.now(UTC)
+        create_execution_event(session, event_type="model_sync", target_type="catalog", trigger_source="scheduler", status="error", code=exc.__class__.__name__, message=message)
+        session.flush()
+        return [message]
+
+
+def auto_disable_inactive_models(session: Session, *, inactive_days: int = INACTIVE_MODEL_DAYS) -> list[str]:
+    now = datetime.now(UTC)
+    threshold = now - timedelta(days=inactive_days)
+    messages: list[str] = []
+    models = session.scalars(select(LLMModel).where(LLMModel.is_selected.is_(True)).order_by(LLMModel.model_id.asc())).all()
+    for model in models:
+        metadata = model.metadata_json or {}
+        if not is_model_api_enabled(model):
+            continue
+        if not bool(metadata.get("is_free_like", False)):
+            continue
+
+        latest_run = session.scalar(
+            select(RunRequest).where(RunRequest.model_id == model.model_id, RunRequest.status == "success").order_by(RunRequest.completed_at.desc(), RunRequest.requested_at.desc())
+        )
+        latest_log = session.scalar(
+            select(LLMDecisionLog).where(LLMDecisionLog.model_id == model.model_id).order_by(LLMDecisionLog.created_at.desc())
+        )
+        candidates = [model.updated_at, model.created_at]
+        if latest_run is not None:
+            candidates.extend([latest_run.completed_at, latest_run.requested_at])
+        if latest_log is not None:
+            candidates.append(latest_log.created_at)
+        candidates = [value for value in candidates if value is not None]
+        last_active_at = max(candidates) if candidates else None
+        metadata["last_active_at"] = last_active_at.astimezone(UTC).isoformat() if last_active_at else None
+
+        if last_active_at is not None and last_active_at >= threshold:
+            if metadata.get("auto_disabled_inactive"):
+                metadata.pop("auto_disabled_inactive", None)
+                metadata.pop("inactive_since", None)
+                if metadata.get("status_note", "").startswith("Auto-disabled after"):
+                    metadata.pop("status_note", None)
+            model.metadata_json = metadata
+            continue
+
+        metadata["api_enabled"] = False
+        metadata["auto_disabled_inactive"] = True
+        metadata["inactive_since"] = now.astimezone(UTC).isoformat()
+        metadata["status_note"] = f"Auto-disabled after {inactive_days} days without successful use. Re-enable manually to use again."
+        model.metadata_json = metadata
+        message = f"Auto-disabled inactive model: {model.model_id}"
+        create_execution_event(session, event_type="model_maintenance", target_type="model", model_id=model.model_id, trigger_source="scheduler", status="success", message=message)
+        messages.append(message)
+
+    session.flush()
+    return messages

@@ -43,6 +43,11 @@ class OpenRouterModel:
         return self.model_id.endswith(":free")
 
     @property
+    def is_experiment_variant(self) -> bool:
+        lowered = self.model_id.lower()
+        return ":experimental" in lowered or ":experiment" in lowered
+
+    @property
     def has_zero_token_cost(self) -> bool:
         prompt = self.prompt_price_per_token or 0.0
         completion = self.completion_price_per_token or 0.0
@@ -50,7 +55,7 @@ class OpenRouterModel:
 
     @property
     def is_free_like(self) -> bool:
-        return self.is_free_variant or self.has_zero_token_cost
+        return self.is_free_variant or self.is_experiment_variant or self.has_zero_token_cost
 
     @property
     def pricing_label(self) -> str:

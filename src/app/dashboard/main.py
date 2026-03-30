@@ -660,9 +660,9 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
 
 def model_allocation_frame(model_id: str, positions_df: pd.DataFrame, portfolios_df: pd.DataFrame, top_n: int = 6) -> pd.DataFrame:
     if positions_df.empty or portfolios_df.empty:
-        return pd.DataFrame(columns=["label", "weight_pct"])
+        return pd.DataFrame(columns=["ticker_label", "ticker", "instrument_name", "weight_pct"])
     if "model_id" not in positions_df.columns or "model_id" not in portfolios_df.columns:
-        return pd.DataFrame(columns=["label", "weight_pct"])
+        return pd.DataFrame(columns=["ticker_label", "ticker", "instrument_name", "weight_pct"])
     model_positions = positions_df[positions_df["model_id"] == model_id].copy()
     model_portfolios = portfolios_df[portfolios_df["model_id"] == model_id].copy()
     rows: list[dict[str, float | str]] = []
@@ -673,15 +673,15 @@ def model_allocation_frame(model_id: str, positions_df: pd.DataFrame, portfolios
             continue
         cash_weight = (float(portfolio.get("available_cash") or 0.0) / total_equity) * 100
         if cash_weight > 0:
-            rows.append({"label": f"[{market_code}] CASH", "weight_pct": cash_weight})
+            rows.append({"ticker_label": f"[{market_code}] CASH", "ticker": "CASH", "instrument_name": f"{market_code} cash", "weight_pct": cash_weight})
         market_positions = model_positions[model_positions["market_code"] == market_code]
         for _, position in market_positions.iterrows():
             market_value = float(position.get("market_value") or 0.0)
             if market_value <= 0:
                 continue
-            rows.append({"label": f"[{market_code}] {position['ticker']}", "weight_pct": (market_value / total_equity) * 100})
+            rows.append({"ticker_label": f"[{market_code}] {position['ticker']}", "ticker": str(position['ticker']), "instrument_name": position.get("instrument_name") or str(position['ticker']), "weight_pct": (market_value / total_equity) * 100})
     if not rows:
-        return pd.DataFrame(columns=["label", "weight_pct"])
+        return pd.DataFrame(columns=["ticker_label", "ticker", "instrument_name", "weight_pct"])
     allocation_df = pd.DataFrame(rows).sort_values("weight_pct", ascending=False).head(top_n)
     return allocation_df
 
@@ -691,15 +691,19 @@ COLOR_RANGE = ["#00c2ff", "#2d7ff9", "#5a4bff", "#845ef7", "#b84cff", "#ff4ecd",
 
 def allocation_chart(allocation_df: pd.DataFrame) -> alt.Chart:
     if allocation_df.empty:
-        return alt.Chart(pd.DataFrame({"label": [], "weight_pct": []})).mark_bar()
+        return alt.Chart(pd.DataFrame({"ticker_label": [], "weight_pct": []})).mark_bar()
     return _apply_chart_theme(
         alt.Chart(allocation_df)
         .mark_bar(cornerRadiusEnd=5)
         .encode(
             x=alt.X("weight_pct:Q", title="Weight %"),
-            y=alt.Y("label:N", sort="-x", title=None),
-            color=alt.Color("label:N", scale=alt.Scale(range=COLOR_RANGE), legend=None),
-            tooltip=[alt.Tooltip("label:N", title="Position"), alt.Tooltip("weight_pct:Q", title="Weight %", format=".2f")],
+            y=alt.Y("ticker_label:N", sort="-x", title=None),
+            color=alt.Color("ticker_label:N", scale=alt.Scale(range=COLOR_RANGE), legend=None),
+            tooltip=[
+                alt.Tooltip("ticker:N", title="Ticker"),
+                alt.Tooltip("instrument_name:N", title="Instrument"),
+                alt.Tooltip("weight_pct:Q", title="Weight %", format=".2f"),
+            ],
         )
         .properties(height=240)
     )
@@ -889,20 +893,20 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
 
 
 def market_pulse_chart(history_df: pd.DataFrame) -> alt.Chart:
-    instrument_count = max(len(history_df["display_name"].dropna().unique()), 1)
-    color_scale = alt.Scale(domain=list(dict.fromkeys(history_df["display_name"].dropna().tolist())), range=COLOR_RANGE[:instrument_count])
-    selection = _legend_highlight_selection("display_name")
+    instrument_count = max(len(history_df["ticker"].dropna().unique()), 1)
+    color_scale = alt.Scale(domain=list(dict.fromkeys(history_df["ticker"].dropna().tolist())), range=COLOR_RANGE[:instrument_count])
+    selection = _legend_highlight_selection("ticker")
     return _apply_chart_theme(
         alt.Chart(history_df)
         .mark_line(point=True, strokeWidth=2.2)
         .encode(
             x=alt.X("as_of:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
             y=alt.Y("return_1h_pct:Q", title="Hourly move %"),
-            color=alt.Color("display_name:N", scale=color_scale, legend=alt.Legend(orient="bottom", columns=min(4, instrument_count), labelLimit=220)),
+            color=alt.Color("ticker:N", scale=color_scale, legend=alt.Legend(orient="bottom", columns=min(4, instrument_count), labelLimit=220)),
             opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)),
             tooltip=[
-                alt.Tooltip("display_name:N", title="Instrument"),
                 alt.Tooltip("ticker:N", title="Ticker"),
+                alt.Tooltip("display_name:N", title="Instrument"),
                 alt.Tooltip("as_of:T", title="Time"),
                 alt.Tooltip("return_1h_pct:Q", title="1h %", format=".3f"),
                 alt.Tooltip("return_1d_pct:Q", title="1d %", format=".3f"),
@@ -1606,6 +1610,8 @@ with admin_tab:
             "api_enabled",
             "search_mode",
             "uses_custom_prompt",
+            "last_active_at",
+            "status_note",
             "pricing_label",
         ]
         st.dataframe(
@@ -1618,6 +1624,8 @@ with admin_tab:
                     "api_enabled": "API enabled",
                     "search_mode": "Search",
                     "uses_custom_prompt": "Custom prompt",
+                    "last_active_at": "Last active (UTC)",
+                    "status_note": "Status note",
                     "pricing_label": "Pricing",
                 }
             ),

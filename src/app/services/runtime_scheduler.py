@@ -12,7 +12,7 @@ from app.market_data.screener import MarketScreener
 from app.orchestration.trading_cycle import TradingCycleService
 from app.services.admin import get_scheduler_status, is_model_api_enabled, update_market_scheduler_state
 from app.services.execution_events import create_execution_event
-from app.services.bootstrap import create_schema
+from app.services.bootstrap import auto_disable_inactive_models, create_schema, run_weekly_free_model_sync_if_due
 from app.services.market_history import record_market_snapshot
 from app.services.run_requests import create_run_request, mark_run_request_finished, mark_run_request_started
 from app.services.shared_news import run_due_news_refreshes
@@ -35,6 +35,9 @@ class RuntimeSchedulerService:
         messages: list[str] = []
         with SessionLocal() as session:
             messages.extend(run_due_news_refreshes(session))
+            messages.extend(run_weekly_free_model_sync_if_due(session))
+            messages.extend(auto_disable_inactive_models(session))
+            session.commit()
             status = get_scheduler_status(session)
         due_markets = [item["market_code"] for item in status["markets"] if item["enabled"] and item["is_due"]]
         for market_code in due_markets:
