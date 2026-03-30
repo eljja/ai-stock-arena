@@ -12,17 +12,17 @@ The project is currently in a free-model stabilization phase. The live public le
 
 ## Screenshots
 
-### Live Snapshot
+### Live
 
-![AI Stock Arena live dashboard](assets/readme/live-dashboard.png)
+Open the live benchmark here: [https://aistockarena.com](https://aistockarena.com)
 
-### Full Page Still
+### Still Shot 1
 
-![AI Stock Arena full page still](assets/readme/full-page-still.png)
+![AI Stock Arena still shot 1](assets/readme/full-page-still.png)
 
-### Dashboard Still
+### Still Shot 2
 
-![AI Stock Arena dashboard still](assets/readme/dashboard-still.png)
+![AI Stock Arena still shot 2](assets/readme/dashboard-still.png)
 
 ## What It Does
 
