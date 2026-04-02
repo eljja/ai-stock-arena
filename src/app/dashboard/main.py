@@ -740,20 +740,38 @@ def _model_color_scale(model_ids: list[str]) -> alt.Scale:
     return alt.Scale(domain=list(color_map.keys()), range=list(color_map.values()))
 
 
-def _render_performance_legend_preview(color_map: dict[str, str], selected_models: list[str]) -> None:
+def _style_performance_legend_controls(color_map: dict[str, str], selected_models: list[str]) -> None:
     selected = {str(model_id) for model_id in selected_models}
-    chips = []
-    for model_id, color in color_map.items():
-        active = model_id in selected
-        chips.append(
-            '<span class="asa-legend-chip" '
-            f'style="color: {color if active else "#64748b"}; '
-            f'border-color: {color if active else "rgba(148, 163, 184, 0.22)"}; '
-            f'opacity: {1.0 if active else 0.78};">'
-            f'{html.escape(model_id)}</span>'
-        )
-    if chips:
-        st.markdown(f'<div class="asa-legend-preview">{"".join(chips)}</div>', unsafe_allow_html=True)
+    script = f"""
+    <script>
+    const colorMap = {json.dumps(color_map)};
+    const selected = new Set({json.dumps(sorted(selected))});
+    const inactiveColor = '#64748b';
+    const inactiveBorder = 'rgba(148, 163, 184, 0.22)';
+    function labelOf(node) {{
+      return (node.innerText || node.textContent || '').trim();
+    }}
+    function applyLegendColors() {{
+      const doc = window.parent.document;
+      const nodes = [...doc.querySelectorAll('button, [data-baseweb="tag"]')];
+      for (const node of nodes) {{
+        const label = labelOf(node);
+        if (!Object.prototype.hasOwnProperty.call(colorMap, label)) continue;
+        const active = selected.has(label);
+        const color = active ? colorMap[label] : inactiveColor;
+        node.style.setProperty('color', color, 'important');
+        node.style.setProperty('border-color', active ? color : inactiveBorder, 'important');
+        node.style.setProperty('box-shadow', active ? `inset 0 0 0 1px ${color}` : 'none', 'important');
+        node.style.setProperty('opacity', active ? '1' : '0.78', 'important');
+        node.querySelectorAll('*').forEach((child) => child.style.setProperty('color', color, 'important'));
+      }}
+    }}
+    requestAnimationFrame(() => applyLegendColors());
+    setTimeout(applyLegendColors, 60);
+    setTimeout(applyLegendColors, 250);
+    </script>
+    """
+    st.html(script)
 
 
 def _legend_highlight_selection(field_name: str) -> alt.SelectionParameter:
@@ -1031,24 +1049,30 @@ def market_pulse_chart(history_df: pd.DataFrame) -> alt.Chart:
         .dropna(subset=["ticker"])
         .drop_duplicates(subset=["ticker"], keep="last")
         .copy()
+        .reset_index(drop=True)
     )
-    legend_df["legend_y"] = 1
+    legend_df["legend_row"] = legend_df.index // 10
+    legend_df["legend_col"] = legend_df.index % 10
+    legend_df["legend_y"] = 0
+    row_domain = sorted(legend_df["legend_row"].unique().tolist()) if not legend_df.empty else [0]
     legend_base = alt.Chart(legend_df).encode(
-        x=alt.X("ticker:N", sort=ticker_domain, axis=alt.Axis(title=None, labels=False, ticks=False, domain=False)),
-        y=alt.Y("legend_y:Q", axis=None),
-        color=alt.Color("ticker:N", scale=color_scale, legend=None),
+        x=alt.X("legend_col:O", sort=list(range(10)), axis=None),
+        y=alt.Y("legend_row:O", sort=row_domain, axis=None),
         opacity=alt.condition(selection, alt.value(1.0), alt.value(0.35)),
         tooltip=[
             alt.Tooltip("ticker:N", title="Ticker"),
             alt.Tooltip("display_name:N", title="Instrument"),
         ],
     )
-    legend_points = legend_base.mark_circle(size=110, filled=True)
-    legend_text = legend_base.mark_text(dy=16, fontSize=12, fontWeight=600).encode(
+    legend_hitbox = legend_base.mark_circle(size=360, opacity=0).encode(color=alt.value("#000000"))
+    legend_points = legend_base.mark_circle(size=100, filled=True).encode(
+        color=alt.Color("ticker:N", scale=color_scale, legend=None),
+    )
+    legend_text = legend_base.mark_text(align="left", baseline="middle", dx=12, fontSize=12, fontWeight=600).encode(
         text=alt.Text("ticker:N"),
         color=alt.condition(selection, alt.Color("ticker:N", scale=color_scale, legend=None), alt.value("#64748b")),
     )
-    legend_chart = (legend_points + legend_text).add_params(selection).properties(height=58)
+    legend_chart = (legend_hitbox + legend_points + legend_text).add_params(selection).properties(height=max(42, len(row_domain) * 34))
 
     main_chart = (
         alt.Chart(history_df)
@@ -1250,7 +1274,7 @@ with performance_tab:
             selection_mode="multi",
             key="performance_legend_models",
         ) or []
-        _render_performance_legend_preview(performance_color_map, performance_models)
+        _style_performance_legend_controls(performance_color_map, performance_models)
     else:
         performance_models = st.multiselect(
             "Legend models",
@@ -1258,7 +1282,7 @@ with performance_tab:
             default=performance_default_models,
             key="performance_legend_models_fallback",
         )
-        _render_performance_legend_preview(performance_color_map, performance_models)
+        _style_performance_legend_controls(performance_color_map, performance_models)
     if snapshots_df.empty:
         st.info("No performance snapshots found.")
     else:
