@@ -109,8 +109,8 @@ class MarketauxNewsClient:
         return payload
 
     def _request_variants(self, market_code: str, collection_policy: str) -> list[dict[str, str]]:
-        # Intentionally unfiltered per user request: no country, language, search, or entity restrictions.
-        return [{"sort": "published_at", "sort_order": "desc"}]
+        # Keep collection broad, but restrict Marketaux items to English so the shared feed stays consistent.
+        return [{"sort": "published_at", "sort_order": "desc", "language": "en"}]
 
     def _parse_item(self, raw_item: dict, market_code: str) -> MarketauxNewsItem | None:
         title = str(raw_item.get("title") or "").strip()

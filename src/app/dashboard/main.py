@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import sys
 from pathlib import Path
 
@@ -709,10 +710,99 @@ def allocation_chart(allocation_df: pd.DataFrame) -> alt.Chart:
     )
 
 
+def _model_color_map(model_ids: list[str]) -> dict[str, str]:
+    domain = [str(model_id) for model_id in dict.fromkeys(model_ids) if str(model_id)]
+    if not domain:
+        domain = ["default"]
+    palette = [COLOR_RANGE[index % len(COLOR_RANGE)] for index in range(len(domain))]
+    return dict(zip(domain, palette, strict=False))
+
+
 def _model_color_scale(model_ids: list[str]) -> alt.Scale:
-    domain = list(dict.fromkeys(model_ids))
-    palette = COLOR_RANGE[: max(len(domain), 1)]
-    return alt.Scale(domain=domain, range=palette)
+    color_map = _model_color_map(model_ids)
+    return alt.Scale(domain=list(color_map.keys()), range=list(color_map.values()))
+
+
+def _render_performance_legend_styles(color_map: dict[str, str]) -> None:
+    script = f"""
+    <script>
+    const colorMap = {json.dumps(color_map)};
+    const inactiveColor = '#64748b';
+    function styleLegendPills() {{
+      const doc = window.parent.document;
+      const keys = new Set(Object.keys(colorMap));
+      const nodes = [...doc.querySelectorAll('button, [data-baseweb="tag"]')];
+      for (const node of nodes) {{
+        const label = (node.innerText || node.textContent || '').trim();
+        if (!keys.has(label)) continue;
+        const button = node.tagName === 'BUTTON' ? node : (node.closest('button') || node);
+        const selected = String(button.getAttribute('aria-pressed')).toLowerCase() === 'true' || String(button.dataset?.selected || '').toLowerCase() === 'true';
+        const color = selected ? colorMap[label] : inactiveColor;
+        button.style.borderColor = selected ? color : 'rgba(148,163,184,0.22)';
+        button.style.color = color;
+        button.querySelectorAll('*').forEach((child) => child.style.color = color);
+      }}
+    }}
+    let attempts = 0;
+    const timer = setInterval(() => {{
+      styleLegendPills();
+      attempts += 1;
+      if (attempts >= 20) clearInterval(timer);
+    }}, 250);
+    </script>
+    """
+    components.html(script, height=0, width=0)
+
+
+def _attach_market_pulse_legend_titles(history_df: pd.DataFrame) -> None:
+    if history_df.empty or not {"ticker", "display_name"}.issubset(history_df.columns):
+        return
+    mapping = (
+        history_df[["ticker", "display_name"]]
+        .dropna(subset=["ticker"])
+        .drop_duplicates(subset=["ticker"], keep="last")
+    )
+    tooltip_map = {
+        str(row["ticker"]): str(row["display_name"] or row["ticker"])
+        for _, row in mapping.iterrows()
+        if str(row["ticker"])
+    }
+    if not tooltip_map:
+        return
+    script = f"""
+    <script>
+    const tooltipMap = {json.dumps(tooltip_map)};
+    function attachLegendTitles() {{
+      const doc = window.parent.document;
+      const charts = [...doc.querySelectorAll('[data-testid="stVegaLiteChart"]')];
+      if (!charts.length) return false;
+      const target = charts[charts.length - 1];
+      let updated = 0;
+      target.querySelectorAll('svg text').forEach((textNode) => {{
+        const label = (textNode.textContent || '').trim();
+        if (!tooltipMap[label]) return;
+        const parent = textNode.parentElement;
+        if (!parent) return;
+        parent.setAttribute('title', tooltipMap[label]);
+        let titleNode = parent.querySelector('title');
+        if (!titleNode) {{
+          titleNode = doc.createElementNS('http://www.w3.org/2000/svg', 'title');
+          parent.appendChild(titleNode);
+        }}
+        titleNode.textContent = tooltipMap[label];
+        updated += 1;
+      }});
+      return updated > 0;
+    }}
+    let attempts = 0;
+    const timer = setInterval(() => {{
+      const done = attachLegendTitles();
+      attempts += 1;
+      if (done || attempts >= 20) clearInterval(timer);
+    }}, 300);
+    </script>
+    """
+    components.html(script, height=0, width=0)
 
 
 def _legend_highlight_selection(field_name: str) -> alt.SelectionParameter:
@@ -831,9 +921,9 @@ def _apply_chart_theme(chart):
     )
 
 
-def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models: list[str], *, market_filter: str = "All", x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart:
+def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models: list[str], *, market_filter: str = "All", x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None, color_domain_models: list[str] | None = None) -> alt.Chart:
     model_count = max(len(chart_df["model_id"].dropna().unique()), 1)
-    color_scale = _model_color_scale(selected_models or chart_df["model_id"].dropna().tolist())
+    color_scale = _model_color_scale(color_domain_models or selected_models or chart_df["model_id"].dropna().tolist())
     selection = legend_selection or _legend_highlight_selection("model_id")
     y_domain = _padded_domain(chart_df[metric_name])
     y_title = metric_name.replace("_", " ").title()
@@ -866,15 +956,14 @@ def performance_chart(chart_df: pd.DataFrame, metric_name: str, selected_models:
     return chart
 
 
-def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, fx_rates: dict[str, float] | None = None, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
+def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, fx_rates: dict[str, float] | None = None, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None, color_domain_models: list[str] | None = None) -> alt.Chart | None:
     required = {"model_id", "market_code", "created_at", "side", "gross_amount"}
     if trades_df.empty or not required.issubset(trades_df.columns):
         return None
     filtered_trades = trades_df.copy()
     if market_filter != "All":
         filtered_trades = filtered_trades[filtered_trades["market_code"] == market_filter]
-    if selected_models:
-        filtered_trades = filtered_trades[filtered_trades["model_id"].isin(selected_models)]
+    filtered_trades = filtered_trades[filtered_trades["model_id"].isin(selected_models)]
     if filtered_trades.empty:
         return None
 
@@ -887,7 +976,7 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
     grouped = trades.groupby(["bucket", "model_id", "side"], as_index=False)["gross_amount"].sum()
     grouped["metric"] = grouped["side"].map({"BUY": "Buy", "SELL": "Sell"}).fillna(grouped["side"])
     grouped = grouped.rename(columns={"bucket": "created_at", "gross_amount": "value"})
-    color_scale = _model_color_scale(selected_models or grouped["model_id"].dropna().tolist())
+    color_scale = _model_color_scale(color_domain_models or selected_models or grouped["model_id"].dropna().tolist())
     selection = legend_selection or _legend_highlight_selection("model_id")
     y_domain = _padded_domain(grouped["value"])
     line_opacity = alt.condition(selection, alt.value(1.0), alt.value(0.15)) if legend_selection is not None else alt.value(1.0)
@@ -914,7 +1003,7 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
     return chart
 
 
-def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, fx_rates: dict[str, float] | None = None, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None) -> alt.Chart | None:
+def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter: str, selected_models: list[str], *, fx_rates: dict[str, float] | None = None, x_zoom: alt.SelectionParameter | None = None, legend_selection: alt.SelectionParameter | None = None, color_domain_models: list[str] | None = None) -> alt.Chart | None:
     trade_required = {"model_id", "market_code", "created_at", "commission_amount", "tax_amount", "regulatory_fee_amount"}
     log_required = {"model_id", "market_code", "created_at", "estimated_cost_usd"}
     frames: list[pd.DataFrame] = []
@@ -924,10 +1013,9 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
         filtered_trades = filtered_trades[filtered_trades["market_code"] == market_filter]
         if not filtered_logs.empty:
             filtered_logs = filtered_logs[filtered_logs["market_code"] == market_filter]
-    if selected_models:
-        filtered_trades = filtered_trades[filtered_trades["model_id"].isin(selected_models)]
-        if not filtered_logs.empty:
-            filtered_logs = filtered_logs[filtered_logs["model_id"].isin(selected_models)]
+    filtered_trades = filtered_trades[filtered_trades["model_id"].isin(selected_models)]
+    if not filtered_logs.empty:
+        filtered_logs = filtered_logs[filtered_logs["model_id"].isin(selected_models)]
 
     if not filtered_trades.empty:
         trades = filtered_trades.copy()
@@ -955,7 +1043,7 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
     if not frames:
         return None
     cost_df = pd.concat(frames, ignore_index=True)
-    color_scale = _model_color_scale(selected_models or cost_df["model_id"].dropna().tolist())
+    color_scale = _model_color_scale(color_domain_models or selected_models or cost_df["model_id"].dropna().tolist())
     selection = legend_selection or _legend_highlight_selection("model_id")
     y_domain = _padded_domain(cost_df["value"])
     line_opacity = alt.condition(selection, alt.value(1.0), alt.value(0.15)) if legend_selection is not None else alt.value(1.0)
@@ -1126,14 +1214,11 @@ with ranking_tab:
         ranked.index = range(1, len(ranked) + 1)
         ranking_columns = [
             "model_id",
-            "display_name",
             "search_mode",
             "is_free_like",
             sort_column,
             "kr_return_pct",
             "us_return_pct",
-            "composite_score",
-            "max_drawdown",
             "win_rate",
             "trade_count",
             "llm_cost_usd",
@@ -1141,14 +1226,11 @@ with ranking_tab:
         ]
         rename_map = {
             "model_id": "Model ID",
-            "display_name": "Display name",
             "search_mode": "Search",
             "is_free_like": "Free",
             sort_column: period_label,
             "kr_return_pct": "KR return %",
             "us_return_pct": "US return %",
-            "composite_score": "Composite",
-            "max_drawdown": "MDD",
             "win_rate": "Win rate",
             "trade_count": "Trades",
             "llm_cost_usd": "LLM cost (USD)",
@@ -1183,6 +1265,7 @@ with performance_tab:
     metric_name = st.selectbox("Chart metric", ["total_return_pct", "total_equity"], index=0)
     performance_market = st.selectbox("Performance market", ["All", "KR", "US"], index=0)
     performance_default_models = chosen_models or model_options
+    performance_color_map = _model_color_map(model_options)
     if hasattr(st, "pills"):
         performance_models = st.pills(
             "Legend models",
@@ -1191,6 +1274,7 @@ with performance_tab:
             selection_mode="multi",
             key="performance_legend_models",
         ) or []
+        _render_performance_legend_styles(performance_color_map)
     else:
         performance_models = st.multiselect(
             "Legend models",
@@ -1207,19 +1291,18 @@ with performance_tab:
             chart_df = chart_df[chart_df["market_code"] == performance_market]
         else:
             chart_df = _aggregate_all_market_snapshots(chart_df, fx_rates)
-        if performance_models:
-            chart_df = chart_df[chart_df["model_id"].isin(performance_models)]
+        chart_df = chart_df[chart_df["model_id"].isin(performance_models)]
         if chart_df.empty:
             st.caption("No performance rows match the current filters.")
         else:
             chart_df["created_at"] = pd.to_datetime(chart_df["created_at"])
             x_zoom = alt.selection_interval(encodings=["x"], bind="scales")
-            charts = [performance_chart(chart_df, metric_name, performance_models, market_filter=performance_market, x_zoom=x_zoom, legend_selection=None)]
-            buy_sell = buy_sell_chart(trades_df, performance_market, performance_models, fx_rates=fx_rates, x_zoom=x_zoom, legend_selection=None)
+            charts = [performance_chart(chart_df, metric_name, performance_models, market_filter=performance_market, x_zoom=x_zoom, legend_selection=None, color_domain_models=model_options)]
+            buy_sell = buy_sell_chart(trades_df, performance_market, performance_models, fx_rates=fx_rates, x_zoom=x_zoom, legend_selection=None, color_domain_models=model_options)
             if buy_sell is not None:
                 st.markdown("**Buy / Sell:** Solid line = Buy, dashed line = Sell.")
                 charts.append(buy_sell)
-            overhead = overhead_chart(trades_df, logs_all_df, performance_market, performance_models, fx_rates=fx_rates, x_zoom=x_zoom, legend_selection=None)
+            overhead = overhead_chart(trades_df, logs_all_df, performance_market, performance_models, fx_rates=fx_rates, x_zoom=x_zoom, legend_selection=None, color_domain_models=model_options)
             if overhead is not None:
                 st.markdown("**Overhead:** Solid line = Trade overhead, dashed line = LLM overhead.")
                 charts.append(overhead)
@@ -1251,6 +1334,7 @@ with market_tab:
             instrument_registry = instrument_registry[instrument_registry["ticker"].isin(price_history["ticker"].unique())].copy()
             instrument_registry["display_name"] = instrument_registry["instrument_name"].fillna(instrument_registry["ticker"])
         st.altair_chart(market_pulse_chart(price_history), use_container_width=True)
+        _attach_market_pulse_legend_titles(price_history)
         latest_rows = (
             price_history.sort_values(["ticker", "as_of"]).groupby("ticker", as_index=False).tail(1)
             .sort_values(["return_1h_pct", "return_1d_pct"], ascending=[False, False])
