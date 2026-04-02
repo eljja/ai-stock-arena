@@ -761,7 +761,7 @@ def _style_performance_legend_controls(color_map: dict[str, str], selected_model
         const color = active ? colorMap[label] : inactiveColor;
         node.style.setProperty('color', color, 'important');
         node.style.setProperty('border-color', active ? color : inactiveBorder, 'important');
-        node.style.setProperty('box-shadow', active ? `inset 0 0 0 1px ${color}` : 'none', 'important');
+        node.style.setProperty('box-shadow', active ? `inset 0 0 0 1px ${{color}}` : 'none', 'important');
         node.style.setProperty('opacity', active ? '1' : '0.78', 'important');
         node.querySelectorAll('*').forEach((child) => child.style.setProperty('color', color, 'important'));
       }}
