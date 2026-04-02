@@ -529,6 +529,23 @@ def inject_styles() -> None:
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        .asa-legend-preview {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 10px;
+            margin: 8px 0 14px 0;
+        }
+        .asa-legend-chip {
+            display: inline-flex;
+            align-items: center;
+            min-height: 38px;
+            padding: 8px 16px;
+            border-radius: 999px;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            background: rgba(15, 23, 42, 0.55);
+            font: 500 0.95rem 'IBM Plex Sans', sans-serif;
+            transition: color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+        }
         .asa-stat-label {
             font: 600 0.76rem 'Space Grotesk', sans-serif;
             text-transform: uppercase;
@@ -723,86 +740,20 @@ def _model_color_scale(model_ids: list[str]) -> alt.Scale:
     return alt.Scale(domain=list(color_map.keys()), range=list(color_map.values()))
 
 
-def _render_performance_legend_styles(color_map: dict[str, str]) -> None:
-    script = f"""
-    <script>
-    const colorMap = {json.dumps(color_map)};
-    const inactiveColor = '#64748b';
-    function styleLegendPills() {{
-      const doc = window.parent.document;
-      const keys = new Set(Object.keys(colorMap));
-      const nodes = [...doc.querySelectorAll('button, [data-baseweb="tag"]')];
-      for (const node of nodes) {{
-        const label = (node.innerText || node.textContent || '').trim();
-        if (!keys.has(label)) continue;
-        const button = node.tagName === 'BUTTON' ? node : (node.closest('button') || node);
-        const selected = String(button.getAttribute('aria-pressed')).toLowerCase() === 'true' || String(button.dataset?.selected || '').toLowerCase() === 'true';
-        const color = selected ? colorMap[label] : inactiveColor;
-        button.style.borderColor = selected ? color : 'rgba(148,163,184,0.22)';
-        button.style.color = color;
-        button.querySelectorAll('*').forEach((child) => child.style.color = color);
-      }}
-    }}
-    let attempts = 0;
-    const timer = setInterval(() => {{
-      styleLegendPills();
-      attempts += 1;
-      if (attempts >= 20) clearInterval(timer);
-    }}, 250);
-    </script>
-    """
-    components.html(script, height=0, width=0)
-
-
-def _attach_market_pulse_legend_titles(history_df: pd.DataFrame) -> None:
-    if history_df.empty or not {"ticker", "display_name"}.issubset(history_df.columns):
-        return
-    mapping = (
-        history_df[["ticker", "display_name"]]
-        .dropna(subset=["ticker"])
-        .drop_duplicates(subset=["ticker"], keep="last")
-    )
-    tooltip_map = {
-        str(row["ticker"]): str(row["display_name"] or row["ticker"])
-        for _, row in mapping.iterrows()
-        if str(row["ticker"])
-    }
-    if not tooltip_map:
-        return
-    script = f"""
-    <script>
-    const tooltipMap = {json.dumps(tooltip_map)};
-    function attachLegendTitles() {{
-      const doc = window.parent.document;
-      const charts = [...doc.querySelectorAll('[data-testid="stVegaLiteChart"]')];
-      if (!charts.length) return false;
-      const target = charts[charts.length - 1];
-      let updated = 0;
-      target.querySelectorAll('svg text').forEach((textNode) => {{
-        const label = (textNode.textContent || '').trim();
-        if (!tooltipMap[label]) return;
-        const parent = textNode.parentElement;
-        if (!parent) return;
-        parent.setAttribute('title', tooltipMap[label]);
-        let titleNode = parent.querySelector('title');
-        if (!titleNode) {{
-          titleNode = doc.createElementNS('http://www.w3.org/2000/svg', 'title');
-          parent.appendChild(titleNode);
-        }}
-        titleNode.textContent = tooltipMap[label];
-        updated += 1;
-      }});
-      return updated > 0;
-    }}
-    let attempts = 0;
-    const timer = setInterval(() => {{
-      const done = attachLegendTitles();
-      attempts += 1;
-      if (done || attempts >= 20) clearInterval(timer);
-    }}, 300);
-    </script>
-    """
-    components.html(script, height=0, width=0)
+def _render_performance_legend_preview(color_map: dict[str, str], selected_models: list[str]) -> None:
+    selected = {str(model_id) for model_id in selected_models}
+    chips = []
+    for model_id, color in color_map.items():
+        active = model_id in selected
+        chips.append(
+            '<span class="asa-legend-chip" '
+            f'style="color: {color if active else "#64748b"}; '
+            f'border-color: {color if active else "rgba(148, 163, 184, 0.22)"}; '
+            f'opacity: {1.0 if active else 0.78};">'
+            f'{html.escape(model_id)}</span>'
+        )
+    if chips:
+        st.markdown(f'<div class="asa-legend-preview">{"".join(chips)}</div>', unsafe_allow_html=True)
 
 
 def _legend_highlight_selection(field_name: str) -> alt.SelectionParameter:
@@ -1072,15 +1023,40 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
 
 def market_pulse_chart(history_df: pd.DataFrame) -> alt.Chart:
     instrument_count = max(len(history_df["ticker"].dropna().unique()), 1)
-    color_scale = alt.Scale(domain=list(dict.fromkeys(history_df["ticker"].dropna().tolist())), range=COLOR_RANGE[:instrument_count])
-    selection = _legend_highlight_selection("ticker")
-    return _apply_chart_theme(
+    ticker_domain = list(dict.fromkeys(history_df["ticker"].dropna().tolist()))
+    color_scale = alt.Scale(domain=ticker_domain, range=COLOR_RANGE[:instrument_count])
+    selection = alt.selection_point(fields=["ticker"], on="click", toggle=True, empty=True)
+    legend_df = (
+        history_df[["ticker", "display_name"]]
+        .dropna(subset=["ticker"])
+        .drop_duplicates(subset=["ticker"], keep="last")
+        .copy()
+    )
+    legend_df["legend_y"] = 1
+    legend_base = alt.Chart(legend_df).encode(
+        x=alt.X("ticker:N", sort=ticker_domain, axis=alt.Axis(title=None, labels=False, ticks=False, domain=False)),
+        y=alt.Y("legend_y:Q", axis=None),
+        color=alt.Color("ticker:N", scale=color_scale, legend=None),
+        opacity=alt.condition(selection, alt.value(1.0), alt.value(0.35)),
+        tooltip=[
+            alt.Tooltip("ticker:N", title="Ticker"),
+            alt.Tooltip("display_name:N", title="Instrument"),
+        ],
+    )
+    legend_points = legend_base.mark_circle(size=110, filled=True)
+    legend_text = legend_base.mark_text(dy=16, fontSize=12, fontWeight=600).encode(
+        text=alt.Text("ticker:N"),
+        color=alt.condition(selection, alt.Color("ticker:N", scale=color_scale, legend=None), alt.value("#64748b")),
+    )
+    legend_chart = (legend_points + legend_text).add_params(selection).properties(height=58)
+
+    main_chart = (
         alt.Chart(history_df)
         .mark_line(point=True, strokeWidth=2.2)
         .encode(
             x=alt.X("as_of:T", axis=alt.Axis(title=None, format="%y%m%d %H:%M", labelAngle=-25, labelLimit=120)),
             y=alt.Y("return_1h_pct:Q", title="Hourly move %"),
-            color=alt.Color("ticker:N", scale=color_scale, legend=_adaptive_bottom_legend(label_limit=220, symbol_limit=instrument_count)),
+            color=alt.Color("ticker:N", scale=color_scale, legend=None),
             opacity=alt.condition(selection, alt.value(1.0), alt.value(0.15)),
             tooltip=[
                 alt.Tooltip("ticker:N", title="Ticker"),
@@ -1091,9 +1067,9 @@ def market_pulse_chart(history_df: pd.DataFrame) -> alt.Chart:
                 alt.Tooltip("current_price:Q", title="Price", format=".4f"),
             ],
         )
-        .add_params(selection)
         .properties(height=460)
     )
+    return _apply_chart_theme(alt.vconcat(legend_chart, main_chart, spacing=10).add_params(selection))
 
 
 def render_podium_card(row: pd.Series, label: str, period_label: str, period_column: str) -> str:
@@ -1274,7 +1250,7 @@ with performance_tab:
             selection_mode="multi",
             key="performance_legend_models",
         ) or []
-        _render_performance_legend_styles(performance_color_map)
+        _render_performance_legend_preview(performance_color_map, performance_models)
     else:
         performance_models = st.multiselect(
             "Legend models",
@@ -1282,6 +1258,7 @@ with performance_tab:
             default=performance_default_models,
             key="performance_legend_models_fallback",
         )
+        _render_performance_legend_preview(performance_color_map, performance_models)
     if snapshots_df.empty:
         st.info("No performance snapshots found.")
     else:
@@ -1334,7 +1311,6 @@ with market_tab:
             instrument_registry = instrument_registry[instrument_registry["ticker"].isin(price_history["ticker"].unique())].copy()
             instrument_registry["display_name"] = instrument_registry["instrument_name"].fillna(instrument_registry["ticker"])
         st.altair_chart(market_pulse_chart(price_history), use_container_width=True)
-        _attach_market_pulse_legend_titles(price_history)
         latest_rows = (
             price_history.sort_values(["ticker", "as_of"]).groupby("ticker", as_index=False).tail(1)
             .sort_values(["return_1h_pct", "return_1d_pct"], ascending=[False, False])
