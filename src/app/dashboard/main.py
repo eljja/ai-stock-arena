@@ -1135,7 +1135,9 @@ def render_podium_card(row: pd.Series, label: str, period_label: str, period_col
             <div>KR: {html.escape(_pct(row.get('kr_return_pct')))}</div>
             <div>US: {html.escape(_pct(row.get('us_return_pct')))}</div>
             <div>MDD: {html.escape(_pct(row.get('max_drawdown')))}</div>
+            <div>Win: {html.escape(_pct(row.get('win_rate')))}</div>
             <div>LLM: ${(row.get('llm_cost_usd') or 0):.4f}</div>
+            <div>Fees: ${(row.get('trade_fee_cost') or 0):.4f}</div>
         </div>
     </div>
     """
@@ -1185,7 +1187,22 @@ if auto_refresh_enabled:
     components.html(f"<script>setTimeout(function(){{ window.parent.location.reload(); }}, {auto_refresh_minutes * 60 * 1000});</script>", height=0, width=0)
 
 models_df = _frame_with_columns(payload["models"], ["model_id", "display_name", "is_selected", "api_enabled"])
-rankings_df = _frame_with_columns(payload["rankings"], ["model_id", "display_name", "current_return_pct", "kr_return_pct", "us_return_pct", "trade_count", "llm_cost_usd", "pricing_label"])
+rankings_df = _frame_with_columns(
+    payload["rankings"],
+    [
+        "model_id",
+        "display_name",
+        "current_return_pct",
+        "kr_return_pct",
+        "us_return_pct",
+        "max_drawdown",
+        "win_rate",
+        "trade_count",
+        "llm_cost_usd",
+        "trade_fee_cost",
+        "pricing_label",
+    ],
+)
 portfolios_df = _frame_with_columns(payload["portfolios"], ["model_id", "market_code", "currency", "available_cash", "total_equity"])
 positions_df = _frame_with_columns(payload["positions"], ["model_id", "market_code", "ticker", "instrument_name", "quantity", "market_value", "avg_entry_price", "current_price"])
 trades_df = _frame_with_columns(payload["trades"], ["model_id", "market_code", "created_at", "ticker", "side", "gross_amount", "commission_amount", "tax_amount", "regulatory_fee_amount"])
@@ -1252,6 +1269,7 @@ with ranking_tab:
             "win_rate",
             "trade_count",
             "llm_cost_usd",
+            "trade_fee_cost",
             "pricing_label",
         ]
         rename_map = {
@@ -1264,6 +1282,7 @@ with ranking_tab:
             "win_rate": "Win rate",
             "trade_count": "Trades",
             "llm_cost_usd": "LLM cost (USD)",
+            "trade_fee_cost": "Trade fees (USD)",
             "pricing_label": "Pricing",
         }
         if sort_column != "current_return_pct":

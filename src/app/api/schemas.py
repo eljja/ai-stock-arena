@@ -134,6 +134,7 @@ class ModelRanking(BaseModel):
     win_rate: float | None
     trade_count: int
     llm_cost_usd: float | None
+    trade_fee_cost: float | None
     updated_at: datetime | None
 
 
@@ -374,3 +375,4 @@ class ExecutionEventSummary(BaseModel):
     code: str | None
     message: str | None
     created_at: datetime
+

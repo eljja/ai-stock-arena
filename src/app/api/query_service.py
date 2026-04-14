@@ -238,6 +238,7 @@ def list_rankings(
     histories = _snapshot_histories(session=session, selected_only=selected_only)
     trade_counts = _trade_counts(session=session, selected_only=selected_only)
     llm_costs = _llm_cost_totals(session=session, selected_only=selected_only)
+    trade_fee_costs = _trade_fee_totals(session=session, selected_only=selected_only)
 
     by_model: dict[str, list[PortfolioSummary]] = defaultdict(list)
     for portfolio in portfolios:
@@ -286,6 +287,7 @@ def list_rankings(
                 win_rate=_mean(win_rates),
                 trade_count=trade_counts.get(model_id, 0),
                 llm_cost_usd=llm_costs.get(model_id, 0.0),
+                trade_fee_cost=trade_fee_costs.get(model_id, 0.0),
                 updated_at=updated_at or model.updated_at,
             )
         )
@@ -766,6 +768,21 @@ def _llm_cost_totals(session: Session, selected_only: bool) -> dict[str, float]:
     return dict(totals)
 
 
+def _trade_fee_totals(session: Session, selected_only: bool) -> dict[str, float]:
+    fee_total = (
+        func.coalesce(Trade.commission_amount, 0.0)
+        + func.coalesce(Trade.tax_amount, 0.0)
+        + func.coalesce(Trade.regulatory_fee_amount, 0.0)
+    )
+    stmt = select(Trade.model_id, func.sum(fee_total)).group_by(Trade.model_id)
+    if selected_only:
+        stmt = stmt.join(LLMModel, LLMModel.model_id == Trade.model_id).where(LLMModel.is_selected.is_(True))
+    enabled = set(_enabled_market_codes(session))
+    stmt = stmt.where(Trade.market_code.in_(enabled))
+    rows = session.execute(stmt).all()
+    return {model_id: float(total or 0.0) for model_id, total in rows}
+
+
 def _period_delta(history: list[PerformanceSnapshot], delta: timedelta) -> float | None:
     if len(history) < 2:
         return None
@@ -810,13 +827,4 @@ def _log_float(log: LLMDecisionLog, key: str) -> float | None:
     if value in (None, ""):
         return None
     return float(value)
-
-
-
-
-
-
-
-
-
 
