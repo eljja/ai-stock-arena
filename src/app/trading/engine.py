@@ -195,6 +195,12 @@ class TradingEngine:
 
     def record_snapshot(self, session: Session, model_id: str, market_code: str) -> PerformanceSnapshot:
         portfolio = self._get_portfolio(session, model_id, market_code)
+        prior_snapshots = session.scalars(
+            select(PerformanceSnapshot).where(
+                PerformanceSnapshot.model_id == model_id,
+                PerformanceSnapshot.market_code == market_code,
+            ).order_by(PerformanceSnapshot.created_at.asc(), PerformanceSnapshot.id.asc())
+        ).all()
         trades = session.scalars(
             select(Trade).where(
                 Trade.model_id == model_id,
@@ -210,6 +216,10 @@ class TradingEngine:
         win_rate = (len(wins) / len(sell_trades)) * 100 if sell_trades else 0.0
         turnover = sum(abs(trade.gross_amount) for trade in trades) / portfolio.initial_cash if portfolio.initial_cash else 0.0
         total_return_pct = ((portfolio.total_equity - portfolio.initial_cash) / portfolio.initial_cash) * 100 if portfolio.initial_cash else 0.0
+        peak_equity = max([portfolio.initial_cash, portfolio.total_equity, *[item.total_equity for item in prior_snapshots]])
+        current_drawdown = ((portfolio.total_equity - peak_equity) / peak_equity) * 100 if peak_equity else 0.0
+        previous_max_drawdown = min([0.0, *[item.max_drawdown for item in prior_snapshots]])
+        max_drawdown = min(previous_max_drawdown, current_drawdown)
 
         snapshot = PerformanceSnapshot(
             model_id=model_id,
@@ -223,7 +233,7 @@ class TradingEngine:
             unrealized_pnl=portfolio.total_unrealized_pnl,
             volatility=0.0,
             sharpe_ratio=0.0,
-            max_drawdown=0.0,
+            max_drawdown=max_drawdown,
             win_rate=win_rate,
             profit_factor=profit_factor,
             turnover=turnover,
