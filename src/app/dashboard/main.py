@@ -72,21 +72,47 @@ st.set_page_config(page_title="AI Stock Arena", layout="wide", initial_sidebar_s
 @st.cache_data(ttl=30, show_spinner=False)
 def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, object]:
     if api_base_url:
+        warnings: list[str] = []
+        defaults: dict[str, object] = {
+            "overview": {"markets": [], "top_models": [], "headline_metrics": {}},
+            "settings": {},
+            "scheduler": {"markets": []},
+            "models": [],
+            "rankings": [],
+            "portfolios": [],
+            "positions": [],
+            "trades": [],
+            "snapshots": [],
+            "news": [],
+            "logs": [],
+            "runs": [],
+        }
+        request_specs = {
+            "overview": ("/overview", {"selected_only": str(selected_only).lower()}, 10.0),
+            "settings": ("/runtime-settings", None, 8.0),
+            "scheduler": ("/scheduler-status", None, 8.0),
+            "models": ("/models", {"selected_only": "false"}, 8.0),
+            "rankings": ("/rankings", {"selected_only": str(selected_only).lower()}, 12.0),
+            "portfolios": ("/portfolios", {"selected_only": str(selected_only).lower()}, 10.0),
+            "positions": ("/positions", {"selected_only": str(selected_only).lower()}, 10.0),
+            "trades": ("/trades", {"selected_only": str(selected_only).lower(), "limit": 200}, 12.0),
+            "snapshots": ("/snapshots", {"selected_only": str(selected_only).lower(), "limit": 2000}, 15.0),
+            "news": ("/news", {"limit": 5}, 8.0),
+            "logs": ("/llm-logs", {"limit": 200}, 10.0),
+            "runs": ("/run-requests", {"selected_only": str(selected_only).lower(), "limit": 300}, 10.0),
+        }
         with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-            return {
-                "overview": client.get("/overview", params={"selected_only": str(selected_only).lower()}).json(),
-                "settings": client.get("/runtime-settings").json(),
-                "scheduler": client.get("/scheduler-status").json(),
-                "models": client.get("/models", params={"selected_only": "false"}).json(),
-                "rankings": client.get("/rankings", params={"selected_only": str(selected_only).lower()}).json(),
-                "portfolios": client.get("/portfolios", params={"selected_only": str(selected_only).lower()}).json(),
-                "positions": client.get("/positions", params={"selected_only": str(selected_only).lower()}).json(),
-                "trades": client.get("/trades", params={"selected_only": str(selected_only).lower(), "limit": 200}).json(),
-                "snapshots": client.get("/snapshots", params={"selected_only": str(selected_only).lower(), "limit": 2000}).json(),
-                "news": client.get("/news", params={"limit": 5}).json(),
-                "logs": client.get("/llm-logs", params={"limit": 1000}).json(),
-                "runs": client.get("/run-requests", params={"selected_only": str(selected_only).lower(), "limit": 300}).json(),
-            }
+            payload: dict[str, object] = {}
+            for key, (path, params, timeout_seconds) in request_specs.items():
+                try:
+                    response = client.get(path, params=params, timeout=timeout_seconds)
+                    response.raise_for_status()
+                    payload[key] = response.json()
+                except Exception as exc:
+                    payload[key] = defaults[key]
+                    warnings.append(f"{key}: {exc.__class__.__name__}")
+            payload["__warnings__"] = warnings
+            return payload
 
     with SessionLocal() as session:
         return {
@@ -100,8 +126,9 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             "trades": [item.model_dump(mode="json") for item in list_trades(session=session, selected_only=selected_only, limit=200)],
             "snapshots": [item.model_dump(mode="json") for item in list_snapshots(session=session, selected_only=selected_only, limit=2000)],
             "news": [item.model_dump(mode="json") for item in list_news_batches(session=session, limit=5)],
-            "logs": [item.model_dump(mode="json") for item in list_llm_logs(session=session, limit=1000)],
+            "logs": [item.model_dump(mode="json") for item in list_llm_logs(session=session, limit=200)],
             "runs": [item.model_dump(mode="json") for item in list_run_requests(session=session, selected_only=selected_only, limit=300)],
+            "__warnings__": [],
         }
 
 
@@ -1131,6 +1158,7 @@ api_base_url = str(st.session_state.get("dashboard_api_base_url", ""))
 selected_only = bool(st.session_state.get("dashboard_selected_only", True))
 
 payload = load_base_data(api_base_url or None, selected_only)
+dashboard_load_warnings = payload.pop("__warnings__", [])
 execution_event_limit = int(st.session_state.get("dashboard_execution_event_limit", 30))
 execution_events_payload = load_execution_events(api_base_url or None, execution_event_limit + 1, 0)
 overview = payload["overview"]
@@ -1194,6 +1222,8 @@ if chosen_models:
         runs_df = runs_df[runs_df["model_id"].isin(chosen_models)]
 
 render_hero(settings_payload, scheduler_payload, rankings_df, news_batches)
+if dashboard_load_warnings:
+    st.warning("Dashboard loaded with partial API failures: " + ", ".join(dashboard_load_warnings))
 
 scheduler_df = pd.DataFrame(scheduler_payload.get("markets", []))
 
