@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections import defaultdict
+
 import typer
 from sqlalchemy import select
 
-from app.db.models import Portfolio, Position
+from app.db.models import LLMModel, PerformanceSnapshot, Portfolio, Position
 from app.db.session import SessionLocal
 from app.market_data.provider import YahooMarketDataProvider
 from app.market_data.screener import MarketScreener
@@ -76,6 +78,49 @@ def backfill_tracked_history(
         typer.echo("Tracked tickers: " + ", ".join(result["tracked_tickers"]))
     if result["missing_tickers"]:
         typer.echo("Missing tickers: " + ", ".join(result["missing_tickers"]))
+
+
+@cli.command()
+def backfill_mdd(
+    market_code: str | None = None,
+    model_id: str | None = None,
+    selected_only: bool = True,
+) -> None:
+    create_schema()
+    with SessionLocal() as session:
+        stmt = select(PerformanceSnapshot).order_by(
+            PerformanceSnapshot.model_id.asc(),
+            PerformanceSnapshot.market_code.asc(),
+            PerformanceSnapshot.created_at.asc(),
+            PerformanceSnapshot.id.asc(),
+        )
+        if market_code:
+            stmt = stmt.where(PerformanceSnapshot.market_code == market_code.upper())
+        if model_id:
+            stmt = stmt.where(PerformanceSnapshot.model_id == model_id)
+        elif selected_only:
+            stmt = stmt.join(LLMModel, LLMModel.model_id == PerformanceSnapshot.model_id).where(LLMModel.is_selected.is_(True))
+
+        snapshots = session.scalars(stmt).all()
+        grouped: dict[tuple[str, str], list[PerformanceSnapshot]] = defaultdict(list)
+        for snapshot in snapshots:
+            grouped[(snapshot.model_id, snapshot.market_code)].append(snapshot)
+
+        updated = 0
+        for _key, history in grouped.items():
+            peak_equity = 0.0
+            worst_drawdown = 0.0
+            for snapshot in history:
+                peak_equity = max(peak_equity, snapshot.total_equity)
+                drawdown = ((snapshot.total_equity - peak_equity) / peak_equity) * 100 if peak_equity else 0.0
+                worst_drawdown = min(worst_drawdown, drawdown)
+                if snapshot.max_drawdown != worst_drawdown:
+                    snapshot.max_drawdown = worst_drawdown
+                    updated += 1
+
+        session.commit()
+
+    typer.echo(f"Backfilled MDD for {len(grouped)} model/market histories | updated_snapshots={updated}")
 
 
 @cli.command()
