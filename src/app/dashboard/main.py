@@ -1282,7 +1282,7 @@ with ranking_tab:
             "win_rate": "Win rate",
             "trade_count": "Trades",
             "llm_cost_usd": "LLM cost (USD)",
-            "trade_fee_cost": "Trade fees (USD)",
+            "trade_fee_cost": "Trade fees (USD equiv.)",
             "pricing_label": "Pricing",
         }
         if sort_column != "current_return_pct":

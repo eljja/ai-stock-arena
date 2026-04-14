@@ -769,18 +769,24 @@ def _llm_cost_totals(session: Session, selected_only: bool) -> dict[str, float]:
 
 
 def _trade_fee_totals(session: Session, selected_only: bool) -> dict[str, float]:
-    fee_total = (
-        func.coalesce(Trade.commission_amount, 0.0)
-        + func.coalesce(Trade.tax_amount, 0.0)
-        + func.coalesce(Trade.regulatory_fee_amount, 0.0)
-    )
-    stmt = select(Trade.model_id, func.sum(fee_total)).group_by(Trade.model_id)
+    runtime_settings = get_runtime_settings(session)
+    usdkrw = float((runtime_settings.get("fx_rates") or {}).get("USDKRW") or 1500.0)
+    if usdkrw <= 0:
+        usdkrw = 1500.0
+
+    stmt = select(Trade)
     if selected_only:
         stmt = stmt.join(LLMModel, LLMModel.model_id == Trade.model_id).where(LLMModel.is_selected.is_(True))
     enabled = set(_enabled_market_codes(session))
     stmt = stmt.where(Trade.market_code.in_(enabled))
-    rows = session.execute(stmt).all()
-    return {model_id: float(total or 0.0) for model_id, total in rows}
+
+    totals: dict[str, float] = defaultdict(float)
+    for trade in session.scalars(stmt).all():
+        fee_total = float((trade.commission_amount or 0.0) + (trade.tax_amount or 0.0) + (trade.regulatory_fee_amount or 0.0))
+        if str(trade.market_code).upper() == "KR":
+            fee_total /= usdkrw
+        totals[trade.model_id] += fee_total
+    return dict(totals)
 
 
 def _period_delta(history: list[PerformanceSnapshot], delta: timedelta) -> float | None:
