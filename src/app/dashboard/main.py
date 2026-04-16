@@ -828,6 +828,7 @@ def position_value_history_frame(price_history_df: pd.DataFrame, trades_df: pd.D
         history.sort_values("as_of")
         .groupby(["bucket", "ticker"], as_index=False)
         .tail(1)
+        .drop(columns=["as_of"])
         .rename(columns={"bucket": "as_of"})
     )
 
@@ -2238,6 +2239,7 @@ with admin_tab:
                     session.commit()
             refresh_all()
             st.rerun()
+
 
 
 
