@@ -327,13 +327,16 @@ def list_market_price_history(
     selected_only: bool = True,
     top_n: int = 20,
     limit_per_ticker: int = 0,
+    tickers: list[str] | None = None,
 ) -> list[MarketPriceHistoryPoint]:
-    top_tickers = tracked_tickers_for_market(
-        session=session,
-        market_code=market_code,
-        selected_only=selected_only,
-        top_n=top_n,
-    )
+    top_tickers = list(dict.fromkeys(str(ticker) for ticker in (tickers or []) if str(ticker)))
+    if not top_tickers:
+        top_tickers = tracked_tickers_for_market(
+            session=session,
+            market_code=market_code,
+            selected_only=selected_only,
+            top_n=top_n,
+        )
     if not top_tickers:
         return []
 

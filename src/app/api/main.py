@@ -206,14 +206,17 @@ def market_price_history(
     selected_only: bool = Query(default=True),
     top_n: int = Query(default=20, ge=1, le=50),
     limit_per_ticker: int = Query(default=0, ge=0, le=10000),
+    tickers: str | None = Query(default=None),
     session: Session = Depends(get_session),
 ) -> list[MarketPriceHistoryPoint]:
+    ticker_list = [item.strip() for item in (tickers or "").split(",") if item.strip()]
     return list_market_price_history(
         session=session,
         market_code=market_code,
         selected_only=selected_only,
         top_n=top_n,
         limit_per_ticker=limit_per_ticker,
+        tickers=ticker_list or None,
     )
 
 

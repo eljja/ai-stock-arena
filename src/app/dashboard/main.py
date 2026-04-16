@@ -150,7 +150,24 @@ def load_model_logs(api_base_url: str | None, model_id: str | None, market_code:
 
 
 @st.cache_data(ttl=30, show_spinner=False)
-def load_market_history(api_base_url: str | None, market_code: str, selected_only: bool, top_n: int = 20, limit_per_ticker: int = 0) -> list[dict]:
+def load_model_trades(api_base_url: str | None, model_id: str | None, market_code: str | None, limit: int = 500) -> list[dict]:
+    if not model_id:
+        return []
+    if api_base_url:
+        with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+            return client.get(
+                "/trades",
+                params={"model_id": model_id, "market_code": market_code, "limit": limit},
+            ).json()
+    with SessionLocal() as session:
+        return [
+            item.model_dump(mode="json")
+            for item in list_trades(session=session, model_id=model_id, market_code=market_code, limit=limit)
+        ]
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_market_history(api_base_url: str | None, market_code: str, selected_only: bool, top_n: int = 20, limit_per_ticker: int = 0, tickers: tuple[str, ...] | None = None) -> list[dict]:
     if api_base_url:
         with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
             return client.get(
@@ -160,6 +177,7 @@ def load_market_history(api_base_url: str | None, market_code: str, selected_onl
                     "selected_only": str(selected_only).lower(),
                     "top_n": top_n,
                     "limit_per_ticker": limit_per_ticker,
+                    "tickers": ",".join(tickers) if tickers else None,
                 },
             ).json()
     with SessionLocal() as session:
@@ -171,6 +189,7 @@ def load_market_history(api_base_url: str | None, market_code: str, selected_onl
                 selected_only=selected_only,
                 top_n=top_n,
                 limit_per_ticker=limit_per_ticker,
+                tickers=list(tickers) if tickers else None,
             )
         ]
 
@@ -211,6 +230,7 @@ def load_market_fee_settings(api_base_url: str | None, admin_token: str) -> list
 def refresh_all() -> None:
     load_base_data.clear()
     load_model_logs.clear()
+    load_model_trades.clear()
     load_execution_events.clear()
     load_market_fee_settings.clear()
 
@@ -752,6 +772,101 @@ def allocation_chart(allocation_df: pd.DataFrame) -> alt.Chart:
     )
 
 
+
+def position_value_history_frame(price_history_df: pd.DataFrame, trades_df: pd.DataFrame, *, top_n: int = 8) -> pd.DataFrame:
+    trade_required = {"ticker", "side", "quantity", "created_at"}
+    price_required = {"ticker", "as_of", "current_price"}
+    if trades_df.empty or price_history_df.empty or not trade_required.issubset(trades_df.columns) or not price_required.issubset(price_history_df.columns):
+        return pd.DataFrame(columns=["as_of", "ticker", "instrument_name", "value"])
+
+    trades = trades_df.copy()
+    trades["created_at"] = pd.to_datetime(trades["created_at"], errors="coerce", utc=True)
+    trades["quantity"] = pd.to_numeric(trades["quantity"], errors="coerce").fillna(0.0)
+    trades["signed_quantity"] = trades["quantity"]
+    trades.loc[trades["side"].astype(str).str.upper() != "BUY", "signed_quantity"] *= -1
+    trades = trades.dropna(subset=["created_at"])
+    if trades.empty:
+        return pd.DataFrame(columns=["as_of", "ticker", "instrument_name", "value"])
+
+    prices = price_history_df.copy()
+    prices["as_of"] = pd.to_datetime(prices["as_of"], errors="coerce", utc=True)
+    prices["current_price"] = pd.to_numeric(prices["current_price"], errors="coerce").fillna(0.0)
+    prices = prices.dropna(subset=["as_of"])
+    if prices.empty:
+        return pd.DataFrame(columns=["as_of", "ticker", "instrument_name", "value"])
+
+    frames: list[pd.DataFrame] = []
+    for ticker, ticker_prices in prices.groupby("ticker"):
+        ticker_trades = trades[trades["ticker"] == ticker].sort_values("created_at")
+        if ticker_trades.empty:
+            continue
+        quantity_events = ticker_trades.groupby("created_at", as_index=False)["signed_quantity"].sum().sort_values("created_at")
+        quantity_events["quantity"] = quantity_events["signed_quantity"].cumsum()
+        merged = pd.merge_asof(
+            ticker_prices.sort_values("as_of")[["as_of", "current_price", "instrument_name"]],
+            quantity_events[["created_at", "quantity"]].rename(columns={"created_at": "as_of"}),
+            on="as_of",
+            direction="backward",
+        )
+        merged["quantity"] = merged["quantity"].fillna(0.0)
+        merged["value"] = merged["quantity"] * merged["current_price"]
+        merged["ticker"] = ticker
+        frames.append(merged)
+
+    if not frames:
+        return pd.DataFrame(columns=["as_of", "ticker", "instrument_name", "value"])
+
+    history = pd.concat(frames, ignore_index=True)
+    history = history[history["value"] > 0]
+    if history.empty:
+        return pd.DataFrame(columns=["as_of", "ticker", "instrument_name", "value"])
+
+    unique_points = history["as_of"].nunique()
+    bucket_freq = "D" if unique_points > 120 else "6H" if unique_points > 48 else "H"
+    history["bucket"] = history["as_of"].dt.floor(bucket_freq)
+    history = (
+        history.sort_values("as_of")
+        .groupby(["bucket", "ticker"], as_index=False)
+        .tail(1)
+        .rename(columns={"bucket": "as_of"})
+    )
+
+    top_tickers = history.groupby("ticker")["value"].max().sort_values(ascending=False).head(top_n).index.tolist()
+    history["ticker"] = history["ticker"].where(history["ticker"].isin(top_tickers), "OTHER")
+    history["instrument_name"] = history["instrument_name"].fillna(history["ticker"])
+    history.loc[history["ticker"] == "OTHER", "instrument_name"] = "Other positions"
+
+    collapsed = history.groupby(["as_of", "ticker"], as_index=False).agg(
+        instrument_name=("instrument_name", "last"),
+        value=("value", "sum"),
+    )
+    return collapsed.sort_values(["as_of", "value"], ascending=[True, False])
+
+
+
+def position_value_history_chart(history_df: pd.DataFrame, currency: str) -> alt.Chart | None:
+    if history_df.empty or not {"as_of", "ticker", "instrument_name", "value"}.issubset(history_df.columns):
+        return None
+    ticker_domain = list(dict.fromkeys(history_df["ticker"].dropna().tolist()))
+    color_scale = alt.Scale(domain=ticker_domain, range=COLOR_RANGE[: max(len(ticker_domain), 1)])
+    return _apply_chart_theme(
+        alt.Chart(history_df)
+        .mark_bar()
+        .encode(
+            x=alt.X("as_of:T", axis=alt.Axis(title=None, format="%y%m%d", labelAngle=-25, labelLimit=120)),
+            y=alt.Y("value:Q", stack="zero", title=f"Position value ({currency})"),
+            color=alt.Color("ticker:N", scale=color_scale, legend=alt.Legend(orient="bottom", direction="horizontal")),
+            tooltip=[
+                alt.Tooltip("ticker:N", title="Ticker"),
+                alt.Tooltip("instrument_name:N", title="Instrument"),
+                alt.Tooltip("as_of:T", title="Time"),
+                alt.Tooltip("value:Q", title="Value", format=",.2f"),
+            ],
+        )
+        .properties(height=260)
+    )
+
+
 def _model_color_map(model_ids: list[str]) -> dict[str, str]:
     domain = [str(model_id) for model_id in dict.fromkeys(model_ids) if str(model_id)]
     if not domain:
@@ -1212,6 +1327,21 @@ execution_events_df = _frame_with_columns(execution_events_payload, ["event_type
 
 model_options = models_df["model_id"].tolist() if not models_df.empty else []
 default_models = models_df.loc[models_df["is_selected"], "model_id"].tolist() if not models_df.empty else []
+detail_model_options = model_options.copy()
+if not rankings_df.empty and {"model_id", "current_return_pct"}.issubset(rankings_df.columns):
+    ranking_order = (
+        rankings_df.assign(current_return_pct=pd.to_numeric(rankings_df["current_return_pct"], errors="coerce"))
+        .sort_values(by=["current_return_pct", "model_id"], ascending=[False, True], na_position="last")["model_id"]
+        .dropna()
+        .tolist()
+    )
+    seen_detail_models: set[str] = set()
+    detail_model_options = []
+    for model_id in ranking_order + model_options:
+        if model_id in seen_detail_models:
+            continue
+        seen_detail_models.add(model_id)
+        detail_model_options.append(model_id)
 if not st.session_state.get("dashboard_models"):
     st.session_state["dashboard_models"] = default_models or model_options
 chosen_models = [model_id for model_id in st.session_state.get("dashboard_models", []) if model_id in model_options]
@@ -1446,13 +1576,13 @@ with detail_tab:
     if not model_options:
         st.info("No models available.")
     else:
-        detail_model = st.selectbox("Model", model_options, index=0)
+        detail_model = st.selectbox("Model", detail_model_options, index=0)
         detail_market = st.selectbox("Market", ["KR", "US"], index=0)
         model_logs = load_model_logs(api_base_url or None, detail_model, detail_market)
         model_runs = runs_df[(runs_df["model_id"] == detail_model) & (runs_df["market_code"] == detail_market)] if not runs_df.empty and {"model_id", "market_code"}.issubset(runs_df.columns) else pd.DataFrame()
         model_portfolios = portfolios_df[(portfolios_df["model_id"] == detail_model) & (portfolios_df["market_code"] == detail_market)] if {"model_id", "market_code"}.issubset(portfolios_df.columns) else pd.DataFrame()
         model_positions = positions_df[(positions_df["model_id"] == detail_model) & (positions_df["market_code"] == detail_market)] if {"model_id", "market_code"}.issubset(positions_df.columns) else pd.DataFrame()
-        model_trades = trades_df[(trades_df["model_id"] == detail_model) & (trades_df["market_code"] == detail_market)] if {"model_id", "market_code"}.issubset(trades_df.columns) else pd.DataFrame()
+        model_trades = pd.DataFrame(load_model_trades(api_base_url or None, detail_model, detail_market, limit=500))
         if not model_portfolios.empty:
             row = model_portfolios.iloc[0]
             detail_metrics = st.columns(4)
@@ -1460,6 +1590,16 @@ with detail_tab:
             detail_metrics[1].metric("Available cash", _money(float(row["available_cash"])))
             detail_metrics[2].metric("Return", _pct(float(row["total_return_pct"])))
             detail_metrics[3].metric("Positions", int(row["position_count"]))
+        detail_tickers = sorted({str(ticker) for ticker in model_positions.get("ticker", pd.Series(dtype="object")).dropna().tolist()} | {str(ticker) for ticker in model_trades.get("ticker", pd.Series(dtype="object")).dropna().tolist()})
+        if detail_tickers:
+            detail_price_history = pd.DataFrame(load_market_history(api_base_url or None, detail_market, False, top_n=max(20, min(len(detail_tickers), 50)), limit_per_ticker=0, tickers=tuple(detail_tickers)))
+            position_history_df = position_value_history_frame(detail_price_history, model_trades)
+            position_history_chart_obj = position_value_history_chart(position_history_df, str(model_portfolios.iloc[0].get("currency") or detail_market) if not model_portfolios.empty else detail_market)
+            if position_history_chart_obj is not None:
+                st.markdown("**Position value history**")
+                st.altair_chart(position_history_chart_obj, use_container_width=True)
+            else:
+                st.caption("No historical position value data available yet for this model/market.")
         st.markdown("**Open positions**")
         if model_positions.empty:
             st.caption("No open positions.")
@@ -2098,5 +2238,8 @@ with admin_tab:
                     session.commit()
             refresh_all()
             st.rerun()
+
+
+
 
 
