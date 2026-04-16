@@ -97,7 +97,7 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             "positions": ("/positions", {"selected_only": str(selected_only).lower()}, 10.0),
             "trades": ("/trades", {"selected_only": str(selected_only).lower(), "limit": 200}, 12.0),
             "snapshots": ("/snapshots", {"selected_only": str(selected_only).lower(), "limit": 2000}, 15.0),
-            "news": ("/news", {"limit": 5}, 8.0),
+            "news": ("/news", {"limit": 10}, 8.0),
             "logs": ("/llm-logs", {"limit": 200}, 10.0),
             "runs": ("/run-requests", {"selected_only": str(selected_only).lower(), "limit": 300}, 10.0),
         }
@@ -125,7 +125,7 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             "positions": [item.model_dump(mode="json") for item in list_positions(session=session, selected_only=selected_only)],
             "trades": [item.model_dump(mode="json") for item in list_trades(session=session, selected_only=selected_only, limit=200)],
             "snapshots": [item.model_dump(mode="json") for item in list_snapshots(session=session, selected_only=selected_only, limit=2000)],
-            "news": [item.model_dump(mode="json") for item in list_news_batches(session=session, limit=5)],
+            "news": [item.model_dump(mode="json") for item in list_news_batches(session=session, limit=10)],
             "logs": [item.model_dump(mode="json") for item in list_llm_logs(session=session, limit=200)],
             "runs": [item.model_dump(mode="json") for item in list_run_requests(session=session, selected_only=selected_only, limit=300)],
             "__warnings__": [],
@@ -242,7 +242,7 @@ def _weekday_labels(values: list[int]) -> str:
     return ", ".join(mapping.get(value, str(value)) for value in values)
 
 
-def _news_preview_rows(news_batches: list[dict], limit: int = 20) -> str:
+def _news_preview_rows(news_batches: list[dict], limit: int = 50) -> str:
     flattened: list[dict[str, str]] = []
     for batch in news_batches or []:
         for item in batch.get("items", []):
@@ -263,7 +263,7 @@ def _news_preview_rows(news_batches: list[dict], limit: int = 20) -> str:
     flattened.sort(key=lambda row: row["published_at"], reverse=True)
     rows = flattened[:limit]
     if not rows:
-        placeholder = html.escape("No shared news loaded yet. This area is reserved for the latest 20 normalized headlines.")
+        placeholder = html.escape("No shared news loaded yet. This area is reserved for the latest 50 normalized headlines.")
         return f'<div class="asa-news-row"><div class="asa-news-time">pending</div><div class="asa-news-line" title="{placeholder}">{placeholder}</div></div>'
     html_rows = []
     for row in rows:
@@ -666,7 +666,7 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
         leader = rankings_df.sort_values(by=["current_return_pct"], ascending=False, na_position="last").iloc[0]
         leader_name = html.escape(str(leader.get("display_name") or leader.get("model_id")))
         leader_return = _pct(leader.get("current_return_pct"))
-    news_rows = _news_preview_rows(news_batches, limit=20)
+    news_rows = _news_preview_rows(news_batches, limit=50)
     current_utc = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC")
     st.markdown(
         f"""
@@ -690,7 +690,6 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
                     <div class="asa-news-meta">
                         <div>
                             <div class="asa-stat-label">Shared News Preview</div>
-                            <div class="asa-news-title">Latest normalized headlines for the benchmark feed</div>
                         </div>
                     </div>
                     <div class="asa-news-list">{news_rows}</div>
@@ -700,7 +699,6 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
         """,
         unsafe_allow_html=True,
     )
-    st.caption(f"Active weekdays: {_weekday_labels(settings_payload.get('active_weekdays', [0, 1, 2, 3, 4]))}")
 
 
 def model_allocation_frame(model_id: str, positions_df: pd.DataFrame, portfolios_df: pd.DataFrame, top_n: int = 6) -> pd.DataFrame:
@@ -2100,3 +2098,5 @@ with admin_tab:
                     session.commit()
             refresh_all()
             st.rerun()
+
+
