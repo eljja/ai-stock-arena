@@ -83,9 +83,7 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             "positions": [],
             "trades": [],
             "snapshots": [],
-            "news": [],
             "logs": [],
-            "runs": [],
         }
         request_specs = {
             "overview": ("/overview", {"selected_only": str(selected_only).lower()}, 10.0),
@@ -97,9 +95,7 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             "positions": ("/positions", {"selected_only": str(selected_only).lower()}, 10.0),
             "trades": ("/trades", {"selected_only": str(selected_only).lower(), "limit": 200}, 12.0),
             "snapshots": ("/snapshots", {"selected_only": str(selected_only).lower(), "limit": 2000}, 15.0),
-            "news": ("/news", {"limit": 10}, 8.0),
             "logs": ("/llm-logs", {"limit": 200}, 10.0),
-            "runs": ("/run-requests", {"selected_only": str(selected_only).lower(), "limit": 300}, 10.0),
         }
         with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
             payload: dict[str, object] = {}
@@ -125,9 +121,7 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             "positions": [item.model_dump(mode="json") for item in list_positions(session=session, selected_only=selected_only)],
             "trades": [item.model_dump(mode="json") for item in list_trades(session=session, selected_only=selected_only, limit=200)],
             "snapshots": [item.model_dump(mode="json") for item in list_snapshots(session=session, selected_only=selected_only, limit=2000)],
-            "news": [item.model_dump(mode="json") for item in list_news_batches(session=session, limit=10)],
             "logs": [item.model_dump(mode="json") for item in list_llm_logs(session=session, limit=200)],
-            "runs": [item.model_dump(mode="json") for item in list_run_requests(session=session, selected_only=selected_only, limit=300)],
             "__warnings__": [],
         }
 
@@ -146,6 +140,32 @@ def load_model_logs(api_base_url: str | None, model_id: str | None, market_code:
         return [
             item.model_dump(mode="json")
             for item in list_llm_logs(session=session, model_id=model_id, market_code=market_code, limit=20)
+        ]
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_news_batches(api_base_url: str | None, limit: int = 10) -> list[dict]:
+    if api_base_url:
+        with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+            return client.get("/news", params={"limit": limit}).json()
+    with SessionLocal() as session:
+        return [item.model_dump(mode="json") for item in list_news_batches(session=session, limit=limit)]
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_model_runs(api_base_url: str | None, model_id: str | None, market_code: str | None, limit: int = 100) -> list[dict]:
+    if not model_id:
+        return []
+    if api_base_url:
+        with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+            return client.get(
+                "/run-requests",
+                params={"model_id": model_id, "market_code": market_code, "limit": limit},
+            ).json()
+    with SessionLocal() as session:
+        return [
+            item.model_dump(mode="json")
+            for item in list_run_requests(session=session, model_id=model_id, market_code=market_code, limit=limit)
         ]
 
 
@@ -230,6 +250,8 @@ def load_market_fee_settings(api_base_url: str | None, admin_token: str) -> list
 def refresh_all() -> None:
     load_base_data.clear()
     load_model_logs.clear()
+    load_news_batches.clear()
+    load_model_runs.clear()
     load_model_trades.clear()
     load_execution_events.clear()
     load_market_fee_settings.clear()
@@ -1275,8 +1297,6 @@ selected_only = bool(st.session_state.get("dashboard_selected_only", True))
 
 payload = load_base_data(api_base_url or None, selected_only)
 dashboard_load_warnings = payload.pop("__warnings__", [])
-execution_event_limit = int(st.session_state.get("dashboard_execution_event_limit", 30))
-execution_events_payload = load_execution_events(api_base_url or None, execution_event_limit + 1, 0)
 overview = payload["overview"]
 settings_payload = payload["settings"] or {
     "decision_interval_minutes": 60,
@@ -1321,10 +1341,8 @@ portfolios_df = _frame_with_columns(payload["portfolios"], ["model_id", "market_
 positions_df = _frame_with_columns(payload["positions"], ["model_id", "market_code", "ticker", "instrument_name", "quantity", "market_value", "avg_entry_price", "current_price"])
 trades_df = _frame_with_columns(payload["trades"], ["model_id", "market_code", "created_at", "ticker", "side", "gross_amount", "commission_amount", "tax_amount", "regulatory_fee_amount"])
 snapshots_df = _frame_with_columns(payload["snapshots"], ["model_id", "market_code", "created_at", "total_return_pct", "total_equity"])
-news_batches = payload["news"]
+news_preview_batches = load_news_batches(api_base_url or None, limit=10)
 logs_all_df = _frame_with_columns(payload.get("logs", []), ["model_id", "market_code", "created_at", "estimated_cost_usd"])
-runs_df = _frame_with_columns(payload.get("runs", []), ["model_id", "market_code", "requested_at", "started_at", "completed_at", "snapshot_as_of", "status", "summary_message", "error_message"])
-execution_events_df = _frame_with_columns(execution_events_payload, ["event_type", "target_type", "model_id", "market_code", "trigger_source", "status", "code", "message", "created_at"])
 
 model_options = models_df["model_id"].tolist() if not models_df.empty else []
 default_models = models_df.loc[models_df["is_selected"], "model_id"].tolist() if not models_df.empty else []
@@ -1364,20 +1382,21 @@ if chosen_models:
         models_df = models_df[models_df["model_id"].isin(chosen_models)]
     if not logs_all_df.empty and "model_id" in logs_all_df.columns:
         logs_all_df = logs_all_df[logs_all_df["model_id"].isin(chosen_models)]
-    if not runs_df.empty and "model_id" in runs_df.columns:
-        runs_df = runs_df[runs_df["model_id"].isin(chosen_models)]
 
-render_hero(settings_payload, scheduler_payload, rankings_df, news_batches)
+render_hero(settings_payload, scheduler_payload, rankings_df, news_preview_batches)
 if dashboard_load_warnings:
     st.warning("Dashboard loaded with partial API failures: " + ", ".join(dashboard_load_warnings))
 
 scheduler_df = pd.DataFrame(scheduler_payload.get("markets", []))
 
-ranking_tab, performance_tab, market_tab, news_tab, detail_tab, admin_tab = st.tabs(
-    ["Ranking", "Performance", "Market Pulse", "Shared News", "Model Detail", "Admin"]
-)
+sections = ["Ranking", "Performance", "Market Pulse", "Model Detail", "Shared News", "Admin"]
+if hasattr(st, "segmented_control"):
+    active_section = st.segmented_control("Section", sections, default=st.session_state.get("dashboard_section", "Ranking"), key="dashboard_section")
+else:
+    active_section = st.radio("Section", sections, index=sections.index(st.session_state.get("dashboard_section", "Ranking")), horizontal=True, key="dashboard_section")
+active_section = active_section or "Ranking"
 
-with ranking_tab:
+if active_section == "Ranking":
     st.markdown('<div class="asa-section-label">League Table</div>', unsafe_allow_html=True)
     period_label = st.selectbox("Ranking period", PERIOD_OPTIONS, index=0)
     sort_column = PERIOD_MAP[period_label]
@@ -1438,7 +1457,7 @@ with ranking_tab:
             hide_index=True,
         )
 
-with performance_tab:
+if active_section == "Performance":
     st.markdown('<div class="asa-section-label">Trajectory</div>', unsafe_allow_html=True)
     metric_name = st.selectbox("Chart metric", ["total_return_pct", "total_equity"], index=0)
     performance_market = st.selectbox("Performance market", ["All", "KR", "US"], index=0)
@@ -1489,7 +1508,7 @@ with performance_tab:
             chart_col, _ = st.columns([5, 1])
             chart_col.altair_chart(performance_bundle, use_container_width=True)
 
-with market_tab:
+if active_section == "Market Pulse":
     st.markdown('<div class="asa-section-label">Market Pulse</div>', unsafe_allow_html=True)
     pulse_controls = st.columns([1.1, 1.1, 2.2])
     pulse_market = pulse_controls[0].selectbox("Market pulse market", ["KR", "US"], index=0)
@@ -1552,8 +1571,9 @@ with market_tab:
             use_container_width=True,
             hide_index=True,
         )
-with news_tab:
+if active_section == "Shared News":
     st.markdown('<div class="asa-section-label">Shared News</div>', unsafe_allow_html=True)
+    news_batches = load_news_batches(api_base_url or None, limit=10)
     if not settings_payload.get("news_enabled", False):
         st.markdown('<div class="asa-warning">Shared news is disabled. This league is running as a pure model benchmark with no external news context.</div>', unsafe_allow_html=True)
     if not news_batches:
@@ -1572,7 +1592,7 @@ with news_tab:
                     items["summary"] = items["summary"].fillna("").map(lambda v: html.unescape(str(v)))
                 st.dataframe(items, use_container_width=True, hide_index=True)
 
-with detail_tab:
+if active_section == "Model Detail":
     st.markdown('<div class="asa-section-label">Model Drilldown</div>', unsafe_allow_html=True)
     if not model_options:
         st.info("No models available.")
@@ -1580,7 +1600,7 @@ with detail_tab:
         detail_model = st.selectbox("Model", detail_model_options, index=0)
         detail_market = st.selectbox("Market", ["KR", "US"], index=0)
         model_logs = load_model_logs(api_base_url or None, detail_model, detail_market)
-        model_runs = runs_df[(runs_df["model_id"] == detail_model) & (runs_df["market_code"] == detail_market)] if not runs_df.empty and {"model_id", "market_code"}.issubset(runs_df.columns) else pd.DataFrame()
+        model_runs = pd.DataFrame(load_model_runs(api_base_url or None, detail_model, detail_market, limit=100))
         model_portfolios = portfolios_df[(portfolios_df["model_id"] == detail_model) & (portfolios_df["market_code"] == detail_market)] if {"model_id", "market_code"}.issubset(portfolios_df.columns) else pd.DataFrame()
         model_positions = positions_df[(positions_df["model_id"] == detail_model) & (positions_df["market_code"] == detail_market)] if {"model_id", "market_code"}.issubset(positions_df.columns) else pd.DataFrame()
         model_trades = pd.DataFrame(load_model_trades(api_base_url or None, detail_model, detail_market, limit=500))
@@ -1680,7 +1700,7 @@ with detail_tab:
                 hide_index=True,
             )
 
-with admin_tab:
+if active_section == "Admin":
     st.markdown('<div class="asa-section-label">Admin Controls</div>', unsafe_allow_html=True)
     st.caption("All timestamps and windows in this tab are shown in UTC.")
     st.text_input("Admin token", type="password", key="dashboard_admin_token", help="Press Enter to apply.")
@@ -1698,6 +1718,9 @@ with admin_tab:
             st.info(message)
 
         st.markdown("**News and runtime controls**")
+        execution_event_limit = int(st.session_state.get("dashboard_execution_event_limit", 30))
+        execution_events_payload = load_execution_events(api_base_url or None, execution_event_limit + 1, 0)
+        execution_events_df = _frame_with_columns(execution_events_payload, ["event_type", "target_type", "model_id", "market_code", "trigger_source", "status", "code", "message", "created_at"])
         scheduler_admin_df = _utc_frame(
             scheduler_df,
             ["last_started_at", "last_completed_at", "next_run_at", "news_last_started_at", "news_last_completed_at"],
@@ -2239,6 +2262,7 @@ with admin_tab:
                     session.commit()
             refresh_all()
             st.rerun()
+
 
 
 
