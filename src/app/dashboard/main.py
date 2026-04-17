@@ -3,6 +3,8 @@ from __future__ import annotations
 import html
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -67,6 +69,11 @@ PERIOD_MAP = {
 }
 
 st.set_page_config(page_title="AI Stock Arena", layout="wide", initial_sidebar_state="collapsed")
+
+
+_WARM_CACHE_LOCK = threading.Lock()
+_WARM_CACHE_LAST_RUN: dict[tuple, float] = {}
+_WARM_CACHE_TTL_SECONDS = 25.0
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -255,6 +262,7 @@ def refresh_all() -> None:
     load_model_trades.clear()
     load_execution_events.clear()
     load_market_fee_settings.clear()
+    load_admin_secrets.clear()
 
 
 
@@ -330,6 +338,7 @@ def _mask_secret(value: str | None) -> str:
     return f"{value[:4]}{'*' * max(len(value) - 8, 4)}{value[-4:]}"
 
 
+@st.cache_data(ttl=30, show_spinner=False)
 def load_admin_secrets(api_base_url: str | None, admin_token: str) -> dict[str, str | None]:
     if api_base_url:
         with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
@@ -358,6 +367,67 @@ def _utc_frame(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
         if column in clone.columns:
             clone[column] = clone[column].apply(_utc_string)
     return clone
+
+
+def _warm_lazy_sections(api_base_url: str | None, selected_only: bool, top_model_id: str | None, admin_token: str | None) -> None:
+    cache_key = (api_base_url or "", bool(selected_only), top_model_id or "", bool(admin_token))
+    now = time.time()
+    with _WARM_CACHE_LOCK:
+        last_run = _WARM_CACHE_LAST_RUN.get(cache_key, 0.0)
+        if now - last_run < _WARM_CACHE_TTL_SECONDS:
+            return
+        _WARM_CACHE_LAST_RUN[cache_key] = now
+
+    def worker() -> None:
+        try:
+            load_news_batches(api_base_url, limit=10)
+        except Exception:
+            pass
+        for market_code in ("KR", "US"):
+            try:
+                load_market_history(api_base_url, market_code, selected_only, top_n=20, limit_per_ticker=0)
+            except Exception:
+                pass
+            try:
+                load_market_instrument_registry(api_base_url, market_code)
+            except Exception:
+                pass
+        if top_model_id:
+            for market_code in ("KR", "US"):
+                try:
+                    load_model_logs(api_base_url, top_model_id, market_code)
+                except Exception:
+                    pass
+                try:
+                    load_model_runs(api_base_url, top_model_id, market_code, limit=100)
+                except Exception:
+                    pass
+                try:
+                    trades = load_model_trades(api_base_url, top_model_id, market_code, limit=500)
+                except Exception:
+                    trades = []
+                if trades:
+                    ticker_tuple = tuple(sorted({str(item.get("ticker")) for item in trades if item.get("ticker")}))
+                    if ticker_tuple:
+                        try:
+                            load_market_history(api_base_url, market_code, False, top_n=max(20, min(len(ticker_tuple), 50)), limit_per_ticker=0, tickers=ticker_tuple)
+                        except Exception:
+                            pass
+        if admin_token:
+            try:
+                load_execution_events(api_base_url, 31, 0)
+            except Exception:
+                pass
+            try:
+                load_admin_secrets(api_base_url, admin_token)
+            except Exception:
+                pass
+            try:
+                load_market_fee_settings(api_base_url, admin_token)
+            except Exception:
+                pass
+
+    threading.Thread(target=worker, daemon=True, name="dashboard-lazy-warmup").start()
 
 
 def inject_styles() -> None:
@@ -1382,6 +1452,15 @@ if chosen_models:
         models_df = models_df[models_df["model_id"].isin(chosen_models)]
     if not logs_all_df.empty and "model_id" in logs_all_df.columns:
         logs_all_df = logs_all_df[logs_all_df["model_id"].isin(chosen_models)]
+
+warm_top_model_id = None
+if not rankings_df.empty and "current_return_pct" in rankings_df.columns and "model_id" in rankings_df.columns:
+    _ranked_for_warmup = rankings_df.copy()
+    _ranked_for_warmup["current_return_pct"] = pd.to_numeric(_ranked_for_warmup["current_return_pct"], errors="coerce")
+    _ranked_for_warmup = _ranked_for_warmup.sort_values(by=["current_return_pct", "model_id"], ascending=[False, True], na_position="last")
+    if not _ranked_for_warmup.empty:
+        warm_top_model_id = str(_ranked_for_warmup.iloc[0]["model_id"])
+_warm_lazy_sections(api_base_url or None, selected_only, warm_top_model_id, str(st.session_state.get("dashboard_admin_token", "")) or None)
 
 render_hero(settings_payload, scheduler_payload, rankings_df, news_preview_batches)
 if dashboard_load_warnings:
