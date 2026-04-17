@@ -28,6 +28,7 @@ from app.api.schemas import (
     TradeSummary,
 )
 from app.db.models import (
+    AdminSetting,
     LLMDecisionLog,
     ExecutionEvent,
     HourlyMarketPrice,
@@ -45,6 +46,10 @@ from app.db.models import (
 from app.services.admin import get_runtime_settings, get_scheduler_status, is_model_api_enabled
 from app.services.market_history import tracked_tickers_for_market
 from app.services.shared_news import get_shared_news_status
+
+
+RANKINGS_CACHE_KEY = "rankings_cache_v1"
+RANKINGS_HISTORY_WINDOW = timedelta(days=45)
 
 
 def get_overview(
@@ -230,6 +235,50 @@ def list_snapshots(
 
 
 def list_rankings(
+    session: Session,
+    selected_only: bool = True,
+) -> list[ModelRanking]:
+    if selected_only:
+        cached = _load_rankings_cache(session)
+        if cached is not None:
+            return cached
+    return _compute_rankings(session=session, selected_only=selected_only)
+
+
+def refresh_rankings_cache(session: Session) -> list[ModelRanking]:
+    rankings = _compute_rankings(session=session, selected_only=True)
+    payload = {
+        "selected_model_ids": _selected_model_ids(session, selected_only=True),
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+        "rankings": [item.model_dump(mode="json") for item in rankings],
+    }
+    setting = session.scalar(select(AdminSetting).where(AdminSetting.key == RANKINGS_CACHE_KEY))
+    if setting is None:
+        setting = AdminSetting(key=RANKINGS_CACHE_KEY, value_json=payload)
+        session.add(setting)
+    else:
+        setting.value_json = payload
+    session.flush()
+    return rankings
+
+
+def _load_rankings_cache(session: Session) -> list[ModelRanking] | None:
+    setting = session.scalar(select(AdminSetting).where(AdminSetting.key == RANKINGS_CACHE_KEY))
+    if setting is None or not isinstance(setting.value_json, dict):
+        return None
+    payload = setting.value_json
+    if payload.get("selected_model_ids") != _selected_model_ids(session, selected_only=True):
+        return None
+    items = payload.get("rankings")
+    if not isinstance(items, list):
+        return None
+    try:
+        return [ModelRanking.model_validate(item) for item in items]
+    except Exception:
+        return None
+
+
+def _compute_rankings(
     session: Session,
     selected_only: bool = True,
 ) -> list[ModelRanking]:
@@ -737,7 +786,8 @@ def _latest_snapshot_times(session: Session, enabled_market_codes: list[str]) ->
 
 
 def _snapshot_histories(session: Session, selected_only: bool) -> dict[tuple[str, str], list[PerformanceSnapshot]]:
-    stmt = select(PerformanceSnapshot).order_by(PerformanceSnapshot.created_at.asc(), PerformanceSnapshot.id.asc())
+    cutoff = datetime.utcnow() - RANKINGS_HISTORY_WINDOW
+    stmt = select(PerformanceSnapshot).where(PerformanceSnapshot.created_at >= cutoff).order_by(PerformanceSnapshot.created_at.asc(), PerformanceSnapshot.id.asc())
     if selected_only:
         stmt = stmt.join(LLMModel, LLMModel.model_id == PerformanceSnapshot.model_id).where(LLMModel.is_selected.is_(True))
     rows = session.scalars(stmt).all()
@@ -777,19 +827,29 @@ def _trade_fee_totals(session: Session, selected_only: bool) -> dict[str, float]
     if usdkrw <= 0:
         usdkrw = 1500.0
 
-    stmt = select(Trade)
+    enabled = set(_enabled_market_codes(session))
+    stmt = select(
+        Trade.model_id,
+        Trade.market_code,
+        func.sum(Trade.commission_amount + Trade.tax_amount + Trade.regulatory_fee_amount),
+    ).where(Trade.market_code.in_(enabled)).group_by(Trade.model_id, Trade.market_code)
     if selected_only:
         stmt = stmt.join(LLMModel, LLMModel.model_id == Trade.model_id).where(LLMModel.is_selected.is_(True))
-    enabled = set(_enabled_market_codes(session))
-    stmt = stmt.where(Trade.market_code.in_(enabled))
 
     totals: dict[str, float] = defaultdict(float)
-    for trade in session.scalars(stmt).all():
-        fee_total = float((trade.commission_amount or 0.0) + (trade.tax_amount or 0.0) + (trade.regulatory_fee_amount or 0.0))
-        if str(trade.market_code).upper() == "KR":
-            fee_total /= usdkrw
-        totals[trade.model_id] += fee_total
+    for model_id, market_code, fee_total in session.execute(stmt).all():
+        normalized_total = float(fee_total or 0.0)
+        if str(market_code).upper() == "KR":
+            normalized_total /= usdkrw
+        totals[str(model_id)] += normalized_total
     return dict(totals)
+
+
+def _selected_model_ids(session: Session, selected_only: bool) -> list[str]:
+    stmt = select(LLMModel.model_id).order_by(LLMModel.model_id.asc())
+    if selected_only:
+        stmt = stmt.where(LLMModel.is_selected.is_(True))
+    return [str(model_id) for model_id in session.scalars(stmt).all()]
 
 
 def _period_delta(history: list[PerformanceSnapshot], delta: timedelta) -> float | None:

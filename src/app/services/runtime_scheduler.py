@@ -16,6 +16,7 @@ from app.services.bootstrap import auto_disable_inactive_models, create_schema, 
 from app.services.market_history import record_market_snapshot
 from app.services.run_requests import create_run_request, mark_run_request_finished, mark_run_request_started
 from app.services.shared_news import run_due_news_refreshes
+from app.api.query_service import refresh_rankings_cache
 
 
 class RuntimeSchedulerService:
@@ -166,5 +167,6 @@ class RuntimeSchedulerService:
                 last_status=final_status,
                 last_message=message,
             )
+            refresh_rankings_cache(session)
             session.commit()
         return message
