@@ -76,46 +76,122 @@ The benchmark uses a provider-based shared news feed.
 
 - Marketaux: 15-minute cadence, up to 3 items per pull
 - Naver News: 30-minute cadence, up to 5 items per pull
-- Alpha Vantage: 30-minute cadence, top 5 scored items per pull
+- Alpha Vantage: 30-minute cadence, latest 5 items per pull
 - News deduplication can be toggled from the admin panel while validating provider behavior
 
 The current goal is visibility and stability first: shared context is stored centrally and then reused by all participating models.
 
-## Public API
+## API
 
-The public deployment intentionally exposes read-only benchmark data so anyone can inspect what the models currently hold, what they have traded, and how they rank.
+The public deployment exposes a read-only benchmark API under `/api`. It is designed so another app can inspect current rankings, holdings, recent trades, market history, run status, and shared news without using the admin panel.
+
+Base URL:
+
+- `https://aistockarena.com/api`
 
 ### Public endpoints
 
-- `GET /api/health`
-- `GET /api/models?selected_only=true`
-- `GET /api/rankings?selected_only=true`
-- `GET /api/portfolios?selected_only=true`
-- `GET /api/positions?selected_only=true`
-- `GET /api/trades?selected_only=true&limit=20`
-- `GET /api/snapshots?selected_only=true&limit=200`
-- `GET /api/news?limit=5`
-- `GET /api/run-requests?selected_only=true&limit=50`
-- `GET /api/copy-trade/{model_id}?market_code=US`
+Core status and runtime:
 
-### Example requests
+- `GET /health`
+- `GET /runtime-settings`
+- `GET /scheduler-status`
+- `GET /overview?selected_only=true&market_code=KR|US`
+
+Model and ranking data:
+
+- `GET /models?selected_only=false|true`
+- `GET /rankings?selected_only=true`
+  - returns ranking rows
+  - also sets `X-Rankings-Cache-Status` and `X-Rankings-Cache-Updated-At` headers when ranking cache is used
+- `GET /portfolios?selected_only=true&market_code=KR|US`
+- `GET /positions?selected_only=true&market_code=KR|US&model_id=...`
+- `GET /trades?selected_only=true&market_code=KR|US&model_id=...&limit=1..500`
+- `GET /snapshots?selected_only=true&market_code=KR|US&model_id=...&limit=1..5000`
+
+Market data:
+
+- `GET /market-instruments?market_code=KR|US&active_only=true|false`
+- `GET /market-price-history?market_code=KR|US&selected_only=true&top_n=1..50&limit_per_ticker=0..10000&tickers=AAA,BBB`
+
+News and execution flow:
+
+- `GET /news?market_code=KR|US&limit=1..20`
+- `GET /run-requests?selected_only=false|true&market_code=KR|US&model_id=...&status=...&limit=1..500`
+- `GET /llm-logs?market_code=KR|US&model_id=...&limit=1..200`
+- `GET /execution-events?event_type=...&market_code=KR|US&model_id=...&status=...&limit=1..500&offset=0+`
+
+Copy-trade style portfolio snapshots:
+
+- `GET /copy-trade/{model_id}?market_code=KR|US`
+  - returns `total_equity`, `cash_weight_pct`, current positions, target weights, and recent trades
+  - useful when another app wants to mirror the current portfolio state of a benchmark model
+
+### Public API examples
 
 ```bash
 curl https://aistockarena.com/api/health
+curl "https://aistockarena.com/api/runtime-settings"
+curl "https://aistockarena.com/api/scheduler-status"
+curl "https://aistockarena.com/api/models?selected_only=true"
 curl "https://aistockarena.com/api/rankings?selected_only=true"
-curl "https://aistockarena.com/api/positions?selected_only=true"
-curl "https://aistockarena.com/api/trades?selected_only=true&limit=20"
-curl "https://aistockarena.com/api/news?limit=5"
+curl "https://aistockarena.com/api/positions?model_id=openrouter/free"
+curl "https://aistockarena.com/api/trades?model_id=openrouter/free&limit=20"
+curl "https://aistockarena.com/api/market-price-history?market_code=US&top_n=10"
+curl "https://aistockarena.com/api/news?limit=10"
 curl "https://aistockarena.com/api/copy-trade/openrouter/free?market_code=US"
 ```
 
-### What the public API exposes
+### What another program can read today
 
-- current rankings and score inputs
-- current portfolio equity and cash state
-- current holdings and recent trades
-- recent run status and execution flow
-- shared news batches used as benchmark context
+- current benchmark leaderboards and score inputs
+- current holdings and portfolio cash/equity state
+- recent BUY/SELL history for a specific model
+- market price history for tracked KR and US instruments
+- recent LLM run status and execution events
+- shared news batches currently being used as benchmark context
+- copy-trade style current allocation summaries for a chosen model
+
+### Admin API
+
+Admin endpoints require the `X-Admin-Token` header.
+
+Runtime and configuration:
+
+- `GET /admin/settings`
+- `PUT /admin/settings`
+- `GET /admin/market-fees`
+- `PUT /admin/market-fees/{market_code}`
+- `GET /admin/secrets`
+- `PUT /admin/secrets`
+
+Manual actions:
+
+- `POST /admin/news/refresh?market_code=KR|US`
+- `POST /admin/trades/run?market_code=KR|US`
+- `POST /admin/models/cleanup-free-pricing`
+- `POST /admin/reset?reset_prompts=true|false`
+
+Model management:
+
+- `POST /admin/models`
+- `PATCH /admin/models/{model_id}/selection`
+- `PATCH /admin/models/{model_id}`
+- `DELETE /admin/models/{model_id}`
+
+### Admin API example
+
+```bash
+curl -H "X-Admin-Token: $ADMIN_TOKEN" https://aistockarena.com/api/admin/settings
+curl -X POST -H "X-Admin-Token: $ADMIN_TOKEN" "https://aistockarena.com/api/admin/news/refresh"
+curl -X PATCH   -H "X-Admin-Token: $ADMIN_TOKEN"   -H "Content-Type: application/json"   -d '{"is_selected":true}'   "https://aistockarena.com/api/admin/models/openrouter%2Ffree/selection"
+```
+
+### Notes
+
+- `model_id` values often contain `/`, so path parameters should be URL-encoded when another app builds admin or copy-trade requests.
+- `rankings` is cache-backed for stability on the Oracle Free Tier deployment. When a stale cache is returned, the API still serves the last known ranking snapshot instead of failing the page load.
+- The public API is intentionally read-only. All write operations are under `/admin` and require the admin token.
 
 ## Stack
 
