@@ -31,7 +31,7 @@ from app.api.query_service import (
     list_positions,
     list_run_requests,
     list_execution_events,
-    list_rankings,
+    get_rankings_with_meta,
     list_snapshots,
     list_trades,
 )
@@ -91,13 +91,14 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             "trades": [],
             "snapshots": [],
             "logs": [],
+            "__rankings_stale_at": None,
         }
         request_specs = {
             "overview": ("/overview", {"selected_only": str(selected_only).lower()}, 10.0),
             "settings": ("/runtime-settings", None, 8.0),
             "scheduler": ("/scheduler-status", None, 8.0),
             "models": ("/models", {"selected_only": "false"}, 8.0),
-            "rankings": ("/rankings", {"selected_only": str(selected_only).lower()}, 12.0),
+            "rankings": ("/rankings", {"selected_only": str(selected_only).lower()}, 18.0),
             "portfolios": ("/portfolios", {"selected_only": str(selected_only).lower()}, 10.0),
             "positions": ("/positions", {"selected_only": str(selected_only).lower()}, 10.0),
             "trades": ("/trades", {"selected_only": str(selected_only).lower(), "limit": 200}, 12.0),
@@ -111,6 +112,12 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
                     response = client.get(path, params=params, timeout=timeout_seconds)
                     response.raise_for_status()
                     payload[key] = response.json()
+                    if key == "rankings":
+                        cache_status = response.headers.get("X-Rankings-Cache-Status", "").strip().lower()
+                        cache_updated_at = response.headers.get("X-Rankings-Cache-Updated-At", "").strip()
+                        if cache_status == "stale":
+                            payload["__rankings_stale_at"] = cache_updated_at or None
+                            warnings.append("rankings: stale cache")
                 except Exception as exc:
                     payload[key] = defaults[key]
                     warnings.append(f"{key}: {exc.__class__.__name__}")
@@ -118,18 +125,25 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             return payload
 
     with SessionLocal() as session:
+        rankings_payload, rankings_meta = get_rankings_with_meta(session=session, selected_only=selected_only)
+        local_warnings: list[str] = []
+        rankings_stale_at = None
+        if rankings_meta.get("cache_status") == "stale":
+            rankings_stale_at = rankings_meta.get("cache_updated_at")
+            local_warnings.append("rankings: stale cache")
         return {
             "overview": get_overview(session=session, selected_only=selected_only).model_dump(mode="json"),
             "settings": get_runtime_settings_response(session=session).model_dump(mode="json"),
             "scheduler": get_scheduler_status_response(session=session).model_dump(mode="json"),
             "models": [item.model_dump(mode="json") for item in list_models(session=session, selected_only=False)],
-            "rankings": [item.model_dump(mode="json") for item in list_rankings(session=session, selected_only=selected_only)],
+            "rankings": [item.model_dump(mode="json") for item in rankings_payload],
             "portfolios": [item.model_dump(mode="json") for item in list_portfolios(session=session, selected_only=selected_only)],
             "positions": [item.model_dump(mode="json") for item in list_positions(session=session, selected_only=selected_only)],
             "trades": [item.model_dump(mode="json") for item in list_trades(session=session, selected_only=selected_only, limit=200)],
             "snapshots": [item.model_dump(mode="json") for item in list_snapshots(session=session, selected_only=selected_only, limit=2000)],
             "logs": [item.model_dump(mode="json") for item in list_llm_logs(session=session, limit=200)],
-            "__warnings__": [],
+            "__warnings__": local_warnings,
+            "__rankings_stale_at": rankings_stale_at,
         }
 
 
@@ -1367,6 +1381,7 @@ selected_only = bool(st.session_state.get("dashboard_selected_only", True))
 
 payload = load_base_data(api_base_url or None, selected_only)
 dashboard_load_warnings = payload.pop("__warnings__", [])
+rankings_stale_at = payload.pop("__rankings_stale_at", None)
 overview = payload["overview"]
 settings_payload = payload["settings"] or {
     "decision_interval_minutes": 60,
@@ -1465,6 +1480,8 @@ _warm_lazy_sections(api_base_url or None, selected_only, warm_top_model_id, str(
 render_hero(settings_payload, scheduler_payload, rankings_df, news_preview_batches)
 if dashboard_load_warnings:
     st.warning("Dashboard loaded with partial API failures: " + ", ".join(dashboard_load_warnings))
+if rankings_stale_at:
+    st.caption(f"Rankings stale as of {rankings_stale_at}.")
 
 scheduler_df = pd.DataFrame(scheduler_payload.get("markets", []))
 

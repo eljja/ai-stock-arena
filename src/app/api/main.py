@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+import threading
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from app.api.query_service import (
     get_copy_trade,
+    get_rankings_with_meta,
     list_execution_events,
     get_overview,
     get_runtime_settings_response,
@@ -18,9 +21,9 @@ from app.api.query_service import (
     list_portfolios,
     list_positions,
     list_run_requests,
-    list_rankings,
     list_snapshots,
     list_trades,
+    refresh_rankings_cache,
 )
 from app.api.schemas import (
     CopyTradeResponse,
@@ -52,7 +55,7 @@ from app.api.schemas import (
     TradeSummary,
 )
 from app.config.loader import load_runtime_config, load_settings
-from app.db.session import get_session
+from app.db.session import SessionLocal, get_session
 from app.services.admin import (
     create_or_update_model_profile,
     delete_model_profile,
@@ -93,6 +96,23 @@ def require_admin(x_admin_token: str | None = Header(default=None, alias="X-Admi
     return x_admin_token
 
 
+def _warm_rankings_cache_once() -> None:
+    def worker() -> None:
+        try:
+            with SessionLocal() as session:
+                refresh_rankings_cache(session)
+                session.commit()
+        except Exception:
+            return
+
+    threading.Thread(target=worker, daemon=True, name="api-rankings-warmup").start()
+
+
+@app.on_event("startup")
+def warm_rankings_cache_on_startup() -> None:
+    _warm_rankings_cache_once()
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", app_name=runtime_config.app.name)
@@ -127,10 +147,18 @@ def models(
 
 @app.get("/rankings", response_model=list[ModelRanking])
 def rankings(
+    response: Response,
     selected_only: bool = Query(default=True),
     session: Session = Depends(get_session),
 ) -> list[ModelRanking]:
-    return list_rankings(session=session, selected_only=selected_only)
+    rankings_payload, meta = get_rankings_with_meta(session=session, selected_only=selected_only)
+    cache_status = str(meta.get("cache_status") or "")
+    cache_updated_at = str(meta.get("cache_updated_at") or "")
+    if cache_status:
+        response.headers["X-Rankings-Cache-Status"] = cache_status
+    if cache_updated_at:
+        response.headers["X-Rankings-Cache-Updated-At"] = cache_updated_at
+    return rankings_payload
 
 
 @app.get("/portfolios", response_model=list[PortfolioSummary])

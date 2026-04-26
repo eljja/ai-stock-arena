@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -238,18 +238,52 @@ def list_rankings(
     session: Session,
     selected_only: bool = True,
 ) -> list[ModelRanking]:
-    if selected_only:
-        cached = _load_rankings_cache(session)
-        if cached is not None:
-            return cached
-    return _compute_rankings(session=session, selected_only=selected_only)
+    rankings, _meta = get_rankings_with_meta(session=session, selected_only=selected_only)
+    return rankings
+
+
+def get_rankings_with_meta(
+    session: Session,
+    selected_only: bool = True,
+) -> tuple[list[ModelRanking], dict[str, object]]:
+    if not selected_only:
+        rankings = _compute_rankings(session=session, selected_only=False)
+        return rankings, {"cache_status": "bypass", "cache_updated_at": None, "stale": False}
+
+    payload = _load_rankings_cache_payload(session)
+    selected_model_ids = _selected_model_ids(session, selected_only=True)
+    fresh_cached = _rankings_from_cache_payload(payload, selected_model_ids=selected_model_ids)
+    if fresh_cached is not None:
+        return fresh_cached, {
+            "cache_status": "fresh",
+            "cache_updated_at": payload.get("updated_at") if isinstance(payload, dict) else None,
+            "stale": False,
+        }
+
+    stale_cached = _rankings_from_cache_payload(payload, selected_model_ids=None)
+    if stale_cached is not None:
+        return stale_cached, {
+            "cache_status": "stale",
+            "cache_updated_at": payload.get("updated_at") if isinstance(payload, dict) else None,
+            "stale": True,
+        }
+
+    rankings = _compute_rankings(session=session, selected_only=True)
+    updated_at = _store_rankings_cache(session, rankings)
+    return rankings, {"cache_status": "computed", "cache_updated_at": updated_at, "stale": False}
 
 
 def refresh_rankings_cache(session: Session) -> list[ModelRanking]:
     rankings = _compute_rankings(session=session, selected_only=True)
+    _store_rankings_cache(session, rankings)
+    return rankings
+
+
+def _store_rankings_cache(session: Session, rankings: list[ModelRanking]) -> str:
+    updated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     payload = {
         "selected_model_ids": _selected_model_ids(session, selected_only=True),
-        "updated_at": datetime.utcnow().isoformat() + "Z",
+        "updated_at": updated_at,
         "rankings": [item.model_dump(mode="json") for item in rankings],
     }
     setting = session.scalar(select(AdminSetting).where(AdminSetting.key == RANKINGS_CACHE_KEY))
@@ -259,15 +293,20 @@ def refresh_rankings_cache(session: Session) -> list[ModelRanking]:
     else:
         setting.value_json = payload
     session.flush()
-    return rankings
+    return updated_at
 
 
-def _load_rankings_cache(session: Session) -> list[ModelRanking] | None:
+def _load_rankings_cache_payload(session: Session) -> dict | None:
     setting = session.scalar(select(AdminSetting).where(AdminSetting.key == RANKINGS_CACHE_KEY))
     if setting is None or not isinstance(setting.value_json, dict):
         return None
-    payload = setting.value_json
-    if payload.get("selected_model_ids") != _selected_model_ids(session, selected_only=True):
+    return setting.value_json
+
+
+def _rankings_from_cache_payload(payload: dict | None, *, selected_model_ids: list[str] | None) -> list[ModelRanking] | None:
+    if payload is None:
+        return None
+    if selected_model_ids is not None and payload.get("selected_model_ids") != selected_model_ids:
         return None
     items = payload.get("rankings")
     if not isinstance(items, list):
