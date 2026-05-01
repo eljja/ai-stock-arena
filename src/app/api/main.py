@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,11 +10,11 @@ from sqlalchemy.orm import Session
 
 from app.api.query_service import (
     get_copy_trade,
-    get_rankings_with_meta,
-    list_execution_events,
     get_overview,
+    get_rankings_with_meta,
     get_runtime_settings_response,
     get_scheduler_status_response,
+    list_execution_events,
     list_llm_logs,
     list_market_instruments,
     list_market_price_history,
@@ -26,26 +28,26 @@ from app.api.query_service import (
     refresh_rankings_cache,
 )
 from app.api.schemas import (
+    AdminActionResponse,
     CopyTradeResponse,
     ExecutionEventSummary,
     HealthResponse,
+    LLMDecisionLogSummary,
     MarketFeeSettingSummary,
     MarketFeeSettingUpdate,
-    LLMDecisionLogSummary,
     MarketInstrumentSummary,
     MarketPriceHistoryPoint,
     ModelProfileUpsertRequest,
-    ModelSelectionUpdate,
-    ModelRuntimeUpdate,
     ModelRanking,
-    AdminActionResponse,
+    ModelRuntimeUpdate,
+    ModelSelectionUpdate,
     ModelSummary,
     NewsBatchSummary,
     OverviewResponse,
     PortfolioSummary,
     PositionSummary,
-    RunRequestSummary,
     ResetResponse,
+    RunRequestSummary,
     RuntimeSecretsResponse,
     RuntimeSecretsUpdate,
     RuntimeSettingsResponse,
@@ -74,9 +76,29 @@ from app.services.runtime_secrets import get_runtime_secrets, update_runtime_sec
 runtime_config = load_runtime_config()
 settings = load_settings()
 
+
+def _warm_rankings_cache_once() -> None:
+    def worker() -> None:
+        try:
+            with SessionLocal() as session:
+                refresh_rankings_cache(session)
+                session.commit()
+        except Exception:
+            return
+
+    threading.Thread(target=worker, daemon=True, name="api-rankings-warmup").start()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    _warm_rankings_cache_once()
+    yield
+
+
 app = FastAPI(
     title="AI Stock Arena API",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -94,23 +116,6 @@ def require_admin(x_admin_token: str | None = Header(default=None, alias="X-Admi
     if x_admin_token != settings.admin_token:
         raise HTTPException(status_code=403, detail="Invalid admin token.")
     return x_admin_token
-
-
-def _warm_rankings_cache_once() -> None:
-    def worker() -> None:
-        try:
-            with SessionLocal() as session:
-                refresh_rankings_cache(session)
-                session.commit()
-        except Exception:
-            return
-
-    threading.Thread(target=worker, daemon=True, name="api-rankings-warmup").start()
-
-
-@app.on_event("startup")
-def warm_rankings_cache_on_startup() -> None:
-    _warm_rankings_cache_once()
 
 
 @app.get("/health", response_model=HealthResponse)

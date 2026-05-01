@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import re
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,7 +10,7 @@ from app.db.models import AdminSetting, ExecutionEvent, SharedNewsBatch, SharedN
 from app.news.alpha_vantage import AlphaVantageNewsClient
 from app.news.marketaux import MarketauxNewsClient
 from app.news.naver import NaverNewsClient
-from app.services.admin import get_runtime_settings, get_scheduler_status
+from app.services.admin import get_runtime_settings
 from app.services.execution_events import create_execution_event
 
 NEWS_STATE_KEY = "shared_news_state"

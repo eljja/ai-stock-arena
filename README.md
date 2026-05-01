@@ -32,6 +32,7 @@ Open the live benchmark here: [https://aistockarena.com](https://aistockarena.co
 - Provides a public dashboard for rankings, performance, market pulse, shared news, and model drilldown.
 - Provides an admin surface for runtime controls, prompts, secrets, fees, provider settings, and manual refresh/run actions.
 - Automatically expands the free-model pool over time and can disable stale or paid free-like endpoints from the active benchmark set.
+- Serves cache-backed rankings so the live dashboard can keep showing the last known league state on a small Oracle VM.
 
 ## How Models Trade
 
@@ -79,7 +80,7 @@ The benchmark uses a provider-based shared news feed.
 - Alpha Vantage: 30-minute cadence, latest 5 items per pull
 - News deduplication can be toggled from the admin panel while validating provider behavior
 
-The current goal is visibility and stability first: shared context is stored centrally and then reused by all participating models.
+Shared news is stored as a global feed. It is not split into separate KR and US scopes because market-moving news can affect both leagues.
 
 ## API
 
@@ -184,7 +185,11 @@ Model management:
 ```bash
 curl -H "X-Admin-Token: $ADMIN_TOKEN" https://aistockarena.com/api/admin/settings
 curl -X POST -H "X-Admin-Token: $ADMIN_TOKEN" "https://aistockarena.com/api/admin/news/refresh"
-curl -X PATCH   -H "X-Admin-Token: $ADMIN_TOKEN"   -H "Content-Type: application/json"   -d '{"is_selected":true}'   "https://aistockarena.com/api/admin/models/openrouter%2Ffree/selection"
+curl -X PATCH \
+  -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"is_selected":true}' \
+  "https://aistockarena.com/api/admin/models/openrouter%2Ffree/selection"
 ```
 
 ### Notes
@@ -230,6 +235,19 @@ Typical server update flow:
 cd /opt/ai-stock-arena/current
 bash deploy/oracle/deploy-update.sh
 ```
+
+Recommended Oracle health checks:
+
+```bash
+free -h
+curl http://127.0.0.1:8000/health
+curl -I -H "Host: aistockarena.com" http://127.0.0.1/
+sudo systemctl status ai-stock-arena-api.service --no-pager
+sudo systemctl status ai-stock-arena-dashboard.service --no-pager
+sudo systemctl status ai-stock-arena-scheduler.service --no-pager
+```
+
+The public Free Tier deployment is memory constrained, so the server should keep swap enabled. The current deployment uses a 4 GB swapfile.
 
 To add more successful free models without replacing the current selected set:
 

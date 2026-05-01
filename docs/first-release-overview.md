@@ -1,181 +1,171 @@
-# AI Stock Arena First Release Overview
+# AI Stock Arena Current Release Overview
 
 ## Release Objective
 
-The first release of AI Stock Arena establishes a working benchmark system for comparing LLM-driven investment behavior, not for running real-money trading.
+AI Stock Arena is a live benchmark for comparing LLM-driven virtual trading behavior. It is not a brokerage integration and does not place real-money orders.
 
-The release is designed around one core rule:
+The core rule is unchanged:
 
-- every model should see the same benchmark context before making a decision
-
-That means the benchmark engine, not the model, controls:
-
-- market snapshot timing
-- candidate screening
-- shared news ingestion
-- transaction-cost rules
-- portfolio accounting
-- performance scoring
+- every model should compete under the same market data, news context, trading cadence, fees, and portfolio accounting rules
 
 ## What Is Included
 
 ### Benchmark Engine
 
-- Unified `KR` and `US` benchmark portfolios
-- Hourly virtual trading cycles
-- Persistent portfolios, positions, trades, and snapshots
-- Trade costs recorded by market
-- LLM token usage and estimated LLM cost recorded as overhead
+- KR and US virtual market portfolios
+- scheduled market cycles
+- persistent portfolios, positions, trades, and performance snapshots
+- market-specific fees, taxes, and regulatory costs
+- MDD, win rate, trade count, LLM cost, and trade fee tracking
+- USD-normalized dashboard views for cross-market comparison
 
 ### LLM Layer
 
 - OpenRouter model catalog integration
-- Free-model probing and selection tools
-- Admin-managed investment profiles
-- Support for `model + custom prompt` profiles
-- Per-profile API enable/disable switch
+- free and experimental model discovery
+- model probing before active use
+- admin-managed model profiles
+- model-generated market-specific investment prompts
+- custom prompt overrides
+- separate controls for league visibility and API call enablement
 
 ### Market Data
 
-- Prototype price data through Yahoo Finance
-- Hourly market history persistence
-- Tracked-instrument market pulse view
-- Instrument registry for active and missing symbols
+- Yahoo Finance based prototype market data
+- hourly tracked-instrument history
+- Market Pulse view for active KR and US instruments
+- instrument registry for current, missing, and historical symbols
 
 ### Shared News
 
-- Shared Marketaux-based benchmark news feed
-- Common news context for all models
-- News collection policies:
-  - `development_fallback`
-  - `live_strict`
-- Duplicate filtering by normalized title and URL
-- Empty refreshes recorded as status without creating empty news batches
+- global shared benchmark news feed
+- Marketaux, Naver News, and Alpha Vantage providers
+- provider-level cadence and status tracking
+- optional duplicate filtering
+- stored news batches reused by all participating models
+
+### Dashboard And API
+
+- Streamlit dashboard with lazy-loaded heavy sections
+- FastAPI public read API
+- admin runtime controls
+- execution event log
+- copy-trade style portfolio snapshot endpoint
+- cache-backed rankings for Oracle Free Tier stability
 
 ### Operations
 
-- FastAPI service
-- Streamlit dashboard
-- Runtime scheduler
-- Local hidden background launchers
-- Oracle deployment assets and systemd units
+- local PowerShell launchers
+- Oracle Cloud deployment scripts
+- systemd units for API, dashboard, and scheduler
+- nginx reverse proxy with Streamlit websocket support
+- documented update path through `deploy-update.sh`
 
 ## Current Data Flow
 
 ```text
-Hourly scheduler
-  -> market price collection
+Scheduler
+  -> due news provider refreshes
+  -> weekly free-model sync if due
+  -> stale/free-like model cleanup
+  -> due market cycle
+  -> market snapshot collection
   -> tracked instrument history persistence
-  -> shared news refresh (policy-based)
-  -> market screening
-  -> common prompt context assembly
+  -> candidate screening
+  -> shared context assembly
   -> LLM decision request
   -> virtual trade execution
   -> performance snapshot update
+  -> ranking cache refresh
   -> dashboard/API visibility
 ```
 
 ## Current Comparison Model
 
-The benchmark is intentionally built as a pure-model comparison league.
-
-Included in the comparison:
+Included in the benchmark:
 
 - same market windows
 - same cadence
-- same shared news
-- same candidate list
+- same shared news context
+- same candidate screening rules
 - same portfolio rules
 - same transaction-cost rules
+- same accounting and snapshot logic
 
-Excluded from the comparison by default:
+Excluded from the default comparison:
 
-- model-side web search
-- model-specific proprietary tools
-- hidden news retrieval capabilities
+- real brokerage execution
+- model-side hidden data retrieval
+- model-specific private tools
 
-Search-enabled variants may still exist, but they should be treated as separate profiles or separate leagues.
+Search, prompt, and model variants should be represented as separate benchmark profiles when they need to be compared independently.
 
 ## Ranking Logic
 
-The current dashboard emphasizes model-vs-model comparison rather than combined portfolio totals.
+The dashboard emphasizes model-vs-model comparison.
 
-Primary comparison dimensions include:
+Displayed and stored signals include:
 
 - since-inception return
-- 1 day return
-- 1 week return
-- 1 month return
+- 1 day, 1 week, and 1 month return
 - KR return
 - US return
-- composite score
 - max drawdown
 - win rate
 - trade count
 - LLM cost in USD
+- trade fees in USD equivalent
+
+Rankings are cached. The API can serve the last known ranking snapshot when live recomputation is slow.
 
 ## Admin Control Surface
 
-The first release already includes a working admin panel for:
+The admin panel includes controls for:
 
-- runtime cadence
-- UTC runtime windows for KR and US
-- shared news enable/disable
-- news collection policy
-- news refresh interval
-- manual shared-news refresh
-- manual trade-cycle execution
-- profile creation and deletion
-- per-profile API pause control
-- runtime secret management
+- trading cadence and weekdays
+- KR and US UTC trading windows
+- global live news enablement
+- provider toggles
+- news deduplication
+- dashboard auto refresh interval
+- USD/KRW FX rate
+- market fees
+- runtime secrets
+- model creation, deletion, selection, API enablement, and custom prompts
+- manual news refresh
+- manual trade cycle execution
+- free/experimental model cleanup
 - full simulation reset
 
-## Technical Constraints In This Release
+## Technical Constraints
+
+### Oracle Free Tier
+
+The public deployment runs on a small Oracle VM. The app is viable there, but memory is tight because FastAPI, Streamlit, and the scheduler are separate Python processes.
+
+Current operational guidance:
+
+- keep swap enabled
+- avoid unnecessary dashboard preload
+- rely on ranking cache fallback
+- monitor service logs and memory usage
 
 ### SQLite
 
-Local SQLite works for development, but it is still a bottleneck for concurrent writes.
+Local SQLite is acceptable for development, but PostgreSQL is the production path.
 
-Mitigations already included:
+### Market Data
 
-- WAL mode
-- busy timeout
-- sequential run preference for heavier tasks
-
-Production recommendation:
-
-- use PostgreSQL on Oracle
-
-### Price Data
-
-`yfinance` is sufficient for the benchmark prototype but should not be treated as a production-grade market-data provider.
-
-Known limitations:
-
-- occasional ticker gaps
-- inconsistent KR coverage
-- possible rate limiting
-- unofficial dependency path
+Yahoo Finance is suitable for prototype benchmarking but remains an unofficial feed. Long-term production use should move behind the existing provider abstraction.
 
 ### News Quality
 
-`Marketaux` works well enough for shared benchmark context, but KR coverage still needs improvement for production quality.
+Provider behavior is intentionally visible. News deduplication can be disabled while validating whether sources are returning usable items.
 
-## Definition Of Done For This Release
+## Current Status
 
-This first version should be treated as complete when the following are true:
+The system is in a free-model stabilization phase.
 
-- local dashboard and API can be launched reliably
-- shared news can be collected and injected into model prompts
-- benchmark profiles can be added, paused, and compared
-- hourly market history and performance snapshots are visible
-- the current repository state is committed as the first baseline release
-
-## What Comes Next After This Release
-
-- Oracle Cloud Free Tier deployment
-- PostgreSQL-first operation
-- stronger KR news source coverage
-- richer full-universe screening
-- chart-only benchmark mode
-- clearer production monitoring and backup procedures
+- free and experimental OpenRouter models are the primary live benchmark set
+- paid model profiles are planned after the free league is stable
+- public APIs already expose rankings, holdings, trades, snapshots, news, logs, and copy-trade style summaries
