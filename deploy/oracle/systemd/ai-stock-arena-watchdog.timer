@@ -2,7 +2,7 @@
 Description=Run AI Stock Arena watchdog every 5 minutes
 
 [Timer]
-OnBootSec=3min
+OnActiveSec=5min
 OnUnitActiveSec=5min
 AccuracySec=30s
 Unit=ai-stock-arena-watchdog.service
