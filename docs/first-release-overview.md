@@ -52,6 +52,7 @@ The core rule is unchanged:
 - execution event log
 - copy-trade style portfolio snapshot endpoint
 - cache-backed rankings for Oracle Free Tier stability
+- scheduler-side maintenance events and watchdog checks for small-server operation
 
 ### Operations
 
@@ -68,6 +69,7 @@ Scheduler
   -> due news provider refreshes
   -> weekly free-model sync if due
   -> stale/free-like model cleanup
+  -> ranking cache maintenance if due
   -> due market cycle
   -> market snapshot collection
   -> tracked instrument history persistence
@@ -148,6 +150,8 @@ Current operational guidance:
 - keep swap enabled
 - avoid unnecessary dashboard preload
 - rely on ranking cache fallback
+- keep DB indexes and dashboard caches warm through scheduler maintenance
+- use logrotate and watchdog timer for unattended operation
 - monitor service logs and memory usage
 
 ### SQLite

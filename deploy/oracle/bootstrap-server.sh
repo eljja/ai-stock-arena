@@ -9,7 +9,7 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 ENV_FILE="/etc/ai-stock-arena/ai-stock-arena.env"
 
 sudo apt-get update
-sudo apt-get install -y git python3 python3-venv python3-pip nginx
+sudo apt-get install -y git python3 python3-venv python3-pip nginx curl logrotate
 
 sudo mkdir -p "$APP_ROOT" /etc/ai-stock-arena /var/log/ai-stock-arena
 sudo chown -R "$USER":"$USER" "$APP_ROOT"
@@ -27,7 +27,11 @@ $PYTHON_BIN -m venv .venv
 ./.venv/bin/python -m pip install --upgrade pip
 ./.venv/bin/python -m pip install -r requirements.txt
 
-chmod +x scripts/linux/run-api.sh scripts/linux/run-dashboard.sh scripts/linux/run-scheduler.sh scripts/linux/add-free-models.sh
+chmod +x scripts/linux/run-api.sh scripts/linux/run-dashboard.sh scripts/linux/run-scheduler.sh scripts/linux/add-free-models.sh scripts/linux/sync-free-models.sh scripts/linux/watchdog.sh
+
+if [ -f deploy/oracle/logrotate/ai-stock-arena ]; then
+  sudo cp deploy/oracle/logrotate/ai-stock-arena /etc/logrotate.d/ai-stock-arena
+fi
 
 if [ ! -f "$ENV_FILE" ]; then
   sudo cp .env.example "$ENV_FILE"
@@ -38,6 +42,6 @@ fi
 
 echo "Oracle bootstrap complete. Next steps:"
 echo "1. Edit $ENV_FILE"
-echo "2. Copy deploy/oracle/systemd/*.service into /etc/systemd/system/"
+echo "2. Copy deploy/oracle/systemd/*.service and *.timer into /etc/systemd/system/"
 echo "3. Copy deploy/oracle/nginx/ai-stock-arena.conf into /etc/nginx/sites-available/"
 echo "4. Enable nginx and systemd services"

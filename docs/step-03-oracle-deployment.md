@@ -7,6 +7,7 @@ Runtime services:
 - FastAPI on `127.0.0.1:8000`
 - Streamlit on `127.0.0.1:8501`
 - scheduler as a long-running systemd service
+- watchdog timer for local health checks
 - nginx proxying `/api/` to FastAPI and `/` to Streamlit
 
 ## 1. VM Baseline
@@ -86,10 +87,13 @@ Provider secrets can also be managed from the admin panel:
 sudo cp deploy/oracle/systemd/ai-stock-arena-api.service /etc/systemd/system/
 sudo cp deploy/oracle/systemd/ai-stock-arena-dashboard.service /etc/systemd/system/
 sudo cp deploy/oracle/systemd/ai-stock-arena-scheduler.service /etc/systemd/system/
+sudo cp deploy/oracle/systemd/ai-stock-arena-watchdog.service /etc/systemd/system/
+sudo cp deploy/oracle/systemd/ai-stock-arena-watchdog.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable ai-stock-arena-api.service
 sudo systemctl enable ai-stock-arena-dashboard.service
 sudo systemctl enable ai-stock-arena-scheduler.service
+sudo systemctl enable ai-stock-arena-watchdog.timer
 ```
 
 Start:
@@ -100,6 +104,7 @@ cd /opt/ai-stock-arena/current
 sudo systemctl start ai-stock-arena-api.service
 sudo systemctl start ai-stock-arena-dashboard.service
 sudo systemctl start ai-stock-arena-scheduler.service
+sudo systemctl start ai-stock-arena-watchdog.timer
 ```
 
 ## 6. Configure Nginx
@@ -145,6 +150,7 @@ sudo systemctl status nginx --no-pager
 sudo systemctl status ai-stock-arena-api.service --no-pager
 sudo systemctl status ai-stock-arena-dashboard.service --no-pager
 sudo systemctl status ai-stock-arena-scheduler.service --no-pager
+sudo systemctl status ai-stock-arena-watchdog.timer --no-pager
 ```
 
 Public checks:
@@ -159,6 +165,8 @@ Public checks:
 cd /opt/ai-stock-arena/current
 bash deploy/oracle/deploy-update.sh
 ```
+
+The update script also refreshes systemd units, enables the watchdog timer, installs logrotate config, and restarts the application services.
 
 If the server branch diverged because the remote branch was force-pushed, back up local changes before aligning the server to `origin/main`.
 
@@ -197,6 +205,7 @@ uptime
 sudo tail -n 100 /var/log/ai-stock-arena/api-error.log
 sudo tail -n 100 /var/log/ai-stock-arena/dashboard-error.log
 sudo tail -n 100 /var/log/ai-stock-arena/scheduler-error.log
+sudo tail -n 100 /var/log/ai-stock-arena/watchdog.log
 ```
 
 Common symptoms:

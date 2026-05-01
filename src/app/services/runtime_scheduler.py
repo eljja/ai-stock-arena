@@ -1,22 +1,26 @@
 from __future__ import annotations
 
 import time
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from app.db.models import LLMModel, RunRequest
+from app.api.query_service import refresh_rankings_cache
+from app.db.models import ExecutionEvent, LLMModel, RunRequest
 from app.db.session import SessionLocal
 from app.market_data.provider import YahooMarketDataProvider
 from app.market_data.screener import MarketScreener
 from app.orchestration.trading_cycle import TradingCycleService
+from app.services.bootstrap import auto_disable_inactive_models, create_schema, run_weekly_free_model_sync_if_due
 from app.services.admin import get_scheduler_status, is_model_api_enabled, update_market_scheduler_state
 from app.services.execution_events import create_execution_event
-from app.services.bootstrap import auto_disable_inactive_models, create_schema, run_weekly_free_model_sync_if_due
 from app.services.market_history import record_market_snapshot
 from app.services.run_requests import create_run_request, mark_run_request_finished, mark_run_request_started
 from app.services.shared_news import run_due_news_refreshes
-from app.api.query_service import refresh_rankings_cache
+
+
+RANKINGS_CACHE_REFRESH_MINUTES = 15
 
 
 class RuntimeSchedulerService:
@@ -34,16 +38,87 @@ class RuntimeSchedulerService:
     def run_pending_once(self) -> list[str]:
         create_schema()
         messages: list[str] = []
+        messages.extend(self._run_isolated_task("news_refresh", self._run_due_news_refreshes))
+        messages.extend(self._run_isolated_task("free_model_sync", self._run_weekly_free_model_sync))
+        messages.extend(self._run_isolated_task("inactive_model_cleanup", self._run_inactive_model_cleanup))
+        messages.extend(self._run_isolated_task("rankings_cache_refresh", self._refresh_rankings_cache_if_due))
         with SessionLocal() as session:
-            messages.extend(run_due_news_refreshes(session))
-            messages.extend(run_weekly_free_model_sync_if_due(session))
-            messages.extend(auto_disable_inactive_models(session))
-            session.commit()
             status = get_scheduler_status(session)
         due_markets = [item["market_code"] for item in status["markets"] if item["enabled"] and item["is_due"]]
         for market_code in due_markets:
-            messages.append(self.run_market_cycle(market_code))
+            messages.extend(
+                self._run_isolated_task(
+                    f"market_cycle_{market_code}",
+                    lambda market_code=market_code: [self.run_market_cycle(market_code)],
+                )
+            )
         return messages
+
+    def _run_isolated_task(self, task_name: str, task: Callable[[], list[str]]) -> list[str]:
+        try:
+            return task()
+        except Exception as exc:
+            message = f"{task_name} failed: {exc}"
+            try:
+                with SessionLocal() as session:
+                    create_execution_event(
+                        session,
+                        event_type="scheduler",
+                        target_type="maintenance",
+                        trigger_source="scheduler",
+                        status="error",
+                        code=exc.__class__.__name__,
+                        message=message,
+                    )
+                    session.commit()
+            except Exception as log_exc:
+                return [f"{message}; failed to record scheduler event: {log_exc}"]
+            return [message]
+
+    def _run_due_news_refreshes(self) -> list[str]:
+        with SessionLocal() as session:
+            messages = run_due_news_refreshes(session)
+            session.commit()
+            return messages
+
+    def _run_weekly_free_model_sync(self) -> list[str]:
+        with SessionLocal() as session:
+            messages = run_weekly_free_model_sync_if_due(session)
+            session.commit()
+            return messages
+
+    def _run_inactive_model_cleanup(self) -> list[str]:
+        with SessionLocal() as session:
+            messages = auto_disable_inactive_models(session)
+            session.commit()
+            return messages
+
+    def _refresh_rankings_cache_if_due(self) -> list[str]:
+        with SessionLocal() as session:
+            latest = session.scalar(
+                select(ExecutionEvent.created_at)
+                .where(ExecutionEvent.event_type == "scheduler")
+                .where(ExecutionEvent.target_type == "maintenance")
+                .where(ExecutionEvent.code == "RANKINGS_CACHE")
+                .where(ExecutionEvent.status == "success")
+                .order_by(ExecutionEvent.created_at.desc())
+                .limit(1)
+            )
+            threshold = datetime.now(UTC) - timedelta(minutes=RANKINGS_CACHE_REFRESH_MINUTES)
+            if latest is not None and latest > threshold:
+                return []
+            refresh_rankings_cache(session)
+            create_execution_event(
+                session,
+                event_type="scheduler",
+                target_type="maintenance",
+                trigger_source="scheduler",
+                status="success",
+                code="RANKINGS_CACHE",
+                message="Refreshed rankings cache.",
+            )
+            session.commit()
+            return ["Refreshed rankings cache."]
 
     def run_market_cycle(self, market_code: str, *, trigger_source: str = "scheduler") -> str:
         started_at = datetime.now(UTC)

@@ -1,0 +1,10 @@
+[Unit]
+Description=AI Stock Arena service watchdog
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/ai-stock-arena/current
+ExecStart=/usr/bin/env bash /opt/ai-stock-arena/current/scripts/linux/watchdog.sh

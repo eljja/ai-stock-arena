@@ -7,6 +7,7 @@ AI Stock Arena runs as three long-lived services:
 - `FastAPI` for public and admin API endpoints
 - `Streamlit` for the dashboard
 - `Scheduler` for news refreshes, model discovery, market cycles, and ranking cache refreshes
+- `Watchdog timer` for lightweight local health checks and targeted service restarts on Oracle
 
 Local launchers:
 
@@ -22,6 +23,7 @@ Oracle services:
 sudo systemctl status ai-stock-arena-api.service --no-pager
 sudo systemctl status ai-stock-arena-dashboard.service --no-pager
 sudo systemctl status ai-stock-arena-scheduler.service --no-pager
+sudo systemctl status ai-stock-arena-watchdog.timer --no-pager
 ```
 
 ## Admin Authentication
@@ -132,6 +134,8 @@ Useful external-app endpoints:
 
 `/api/rankings` is cache-backed. If the live ranking calculation is slow, the API can return the last known ranking snapshot and expose cache status through response headers.
 
+The scheduler also refreshes the ranking cache as an isolated maintenance task. A failure in news refresh, model sync, stale-model cleanup, or ranking-cache refresh is logged as an execution event without stopping the whole scheduler loop.
+
 ## Recommended Local Workflow
 
 1. Start local background services.
@@ -150,4 +154,6 @@ When deployed on Oracle:
 - update through `deploy/oracle/deploy-update.sh`
 - control runtime behavior from the admin panel
 - monitor `/var/log/ai-stock-arena/*.log`
+- let logrotate manage app logs through `/etc/logrotate.d/ai-stock-arena`
+- let the watchdog timer check API, rankings, dashboard, and low-memory signals every 5 minutes
 - keep API, dashboard, scheduler as systemd services

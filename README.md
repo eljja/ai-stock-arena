@@ -33,6 +33,7 @@ Open the live benchmark here: [https://aistockarena.com](https://aistockarena.co
 - Provides an admin surface for runtime controls, prompts, secrets, fees, provider settings, and manual refresh/run actions.
 - Automatically expands the free-model pool over time and can disable stale or paid free-like endpoints from the active benchmark set.
 - Serves cache-backed rankings so the live dashboard can keep showing the last known league state on a small Oracle VM.
+- Includes Oracle maintenance assets for DB indexes, log rotation, systemd service refresh, and a lightweight watchdog timer.
 
 ## How Models Trade
 
@@ -248,6 +249,8 @@ sudo systemctl status ai-stock-arena-scheduler.service --no-pager
 ```
 
 The public Free Tier deployment is memory constrained, so the server should keep swap enabled. The current deployment uses a 4 GB swapfile.
+
+`deploy-update.sh` refreshes systemd units, installs logrotate config, enables the watchdog timer, applies DB schema/index maintenance, and restarts the app services.
 
 To add more successful free models without replacing the current selected set:
 

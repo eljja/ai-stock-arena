@@ -11,6 +11,10 @@ EnvironmentFile=/etc/ai-stock-arena/ai-stock-arena.env
 ExecStart=/usr/bin/env bash /opt/ai-stock-arena/current/scripts/linux/run-dashboard.sh
 Restart=always
 RestartSec=10
+TimeoutStopSec=30
+KillMode=mixed
+MemoryAccounting=true
+Environment=PYTHONUNBUFFERED=1
 StandardOutput=append:/var/log/ai-stock-arena/dashboard.log
 StandardError=append:/var/log/ai-stock-arena/dashboard-error.log
 

@@ -13,6 +13,7 @@ from app.db.models import AdminSetting, LLMDecisionLog, LLMModel, MarketSetting,
 from app.db.session import engine
 from app.llm.openrouter import OpenRouterClient, OpenRouterModel
 from app.services.admin import create_or_update_model_profile, get_runtime_settings, is_model_api_enabled
+from app.services.db_maintenance import ensure_operational_indexes
 from app.services.execution_events import create_execution_event
 
 FREE_MODEL_SYNC_STATE_KEY = "free_model_sync_state"
@@ -42,6 +43,7 @@ class ModelProbeResult:
 
 def create_schema() -> None:
     Base.metadata.create_all(bind=engine)
+    ensure_operational_indexes(engine)
 
 
 def bootstrap_database(session: Session, sync_openrouter_models: bool = True) -> BootstrapSummary:
