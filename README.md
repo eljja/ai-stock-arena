@@ -259,6 +259,10 @@ cd /opt/ai-stock-arena/current
 bash scripts/linux/add-free-models.sh 10 40 popular
 ```
 
+The Oracle host may also contain a local-only helper named `run_free_models_first_pass.sh`.
+This file is not part of the standard deployment path. It was used as a manual first-pass smoke test: it loads selected API-enabled models, generates US/KR prompts for each model, runs one US and one KR trade cycle with a small candidate limit, then writes a timestamped log under `/opt/ai-stock-arena/current/logs/`.
+Run it only when intentionally creating benchmark run requests, LLM logs, and simulated trades for all currently enabled models.
+
 ## Repository Guide
 
 - [First release overview](docs/first-release-overview.md)

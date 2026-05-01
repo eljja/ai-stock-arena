@@ -157,3 +157,17 @@ When deployed on Oracle:
 - let logrotate manage app logs through `/etc/logrotate.d/ai-stock-arena`
 - let the watchdog timer check API, rankings, dashboard, and low-memory signals every 5 minutes
 - keep API, dashboard, scheduler as systemd services
+
+### Local-Only Oracle Helpers
+
+Some deployed hosts may contain ad hoc helper scripts that are intentionally not part of the normal deploy flow.
+
+`/opt/ai-stock-arena/current/run_free_models_first_pass.sh` is a manual first-pass free-model smoke test. It:
+
+- reads selected API-enabled models from the database
+- generates US and KR prompts for every selected API-enabled model
+- runs one US and one KR trade cycle per model with `--candidate-limit 8`
+- writes a timestamped log under `/opt/ai-stock-arena/current/logs/`
+- queries recent run requests and trades at the end
+
+Treat this as a one-off diagnostic tool, not a scheduler or CI/CD step. Running it can consume OpenRouter quota and create real benchmark records, including run requests, LLM decision logs, trades, positions, and performance snapshots.
