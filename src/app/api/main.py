@@ -152,6 +152,11 @@ def robots_txt() -> PlainTextResponse:
     return PlainTextResponse(body, media_type="text/plain; charset=utf-8")
 
 
+@app.head("/robots.txt", include_in_schema=False)
+def robots_txt_head() -> Response:
+    return Response(media_type="text/plain; charset=utf-8")
+
+
 @app.get("/sitemap.xml", include_in_schema=False)
 def sitemap_xml() -> Response:
     body = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -164,6 +169,11 @@ def sitemap_xml() -> Response:
 </urlset>
 """
     return Response(content=body, media_type="application/xml; charset=utf-8")
+
+
+@app.head("/sitemap.xml", include_in_schema=False)
+def sitemap_xml_head() -> Response:
+    return Response(media_type="application/xml; charset=utf-8")
 
 
 @app.get("/llms.txt", response_class=PlainTextResponse, include_in_schema=False)
@@ -183,6 +193,11 @@ def llms_txt() -> PlainTextResponse:
         ]
     )
     return PlainTextResponse(body, media_type="text/plain; charset=utf-8")
+
+
+@app.head("/llms.txt", include_in_schema=False)
+def llms_txt_head() -> Response:
+    return Response(media_type="text/plain; charset=utf-8")
 
 
 @app.get("/runtime-settings", response_model=RuntimeSettingsResponse)
