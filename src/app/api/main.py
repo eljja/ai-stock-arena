@@ -80,6 +80,8 @@ settings = load_settings()
 
 def _public_site_url() -> str:
     configured = (settings.api_base_url or "").rstrip("/")
+    if "127.0.0.1" in configured or "localhost" in configured:
+        return "https://aistockarena.com"
     if configured.endswith("/api"):
         return configured[: -len("/api")]
     return configured or "https://aistockarena.com"
