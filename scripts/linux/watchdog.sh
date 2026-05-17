@@ -19,8 +19,12 @@ check_url() {
 }
 
 if ! check_url "$API_HEALTH_URL" 20; then
-  log "api health failed; restarting api service"
-  systemctl restart ai-stock-arena-api.service
+  if systemctl is-active --quiet ai-stock-arena-api.service; then
+    log "api health failed while service is active; leaving api running"
+  else
+    log "api health failed and service is inactive; restarting api service"
+    systemctl restart ai-stock-arena-api.service
+  fi
 fi
 
 if ! check_url "$RANKINGS_URL" 35; then
@@ -28,8 +32,12 @@ if ! check_url "$RANKINGS_URL" 35; then
 fi
 
 if ! check_url "$DASHBOARD_URL" 25; then
-  log "dashboard failed; restarting dashboard service"
-  systemctl restart ai-stock-arena-dashboard.service
+  if systemctl is-active --quiet ai-stock-arena-dashboard.service; then
+    log "dashboard health failed while service is active; leaving dashboard running"
+  else
+    log "dashboard health failed and service is inactive; restarting dashboard service"
+    systemctl restart ai-stock-arena-dashboard.service
+  fi
 fi
 
 available_kb="$(awk '/MemAvailable/ {print $2}' /proc/meminfo)"
