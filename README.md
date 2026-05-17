@@ -252,6 +252,13 @@ The public Free Tier deployment is memory constrained, so the server should keep
 
 `deploy-update.sh` refreshes systemd units, installs logrotate config, enables the watchdog timer, applies DB schema/index maintenance, and restarts the app services.
 
+Search visibility basics are part of the production setup:
+
+- `https://aistockarena.com/robots.txt` allows the public site and points to the sitemap.
+- `https://aistockarena.com/sitemap.xml` advertises the live dashboard URL.
+- `https://aistockarena.com/llms.txt` summarizes the benchmark for AI and crawler consumers.
+- The Oracle nginx config injects SEO title, description, canonical, and Open Graph tags into the initial Streamlit HTML without changing Streamlit internals.
+
 To add more successful free models without replacing the current selected set:
 
 ```bash

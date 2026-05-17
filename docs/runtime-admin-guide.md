@@ -158,6 +158,22 @@ When deployed on Oracle:
 - let the watchdog timer check API, rankings, dashboard, and low-memory signals every 5 minutes
 - keep API, dashboard, scheduler as systemd services
 
+## Search Visibility
+
+The production site exposes crawler-friendly metadata endpoints:
+
+- `/robots.txt`
+- `/sitemap.xml`
+- `/llms.txt`
+
+The root dashboard is a Streamlit app, so the initial HTML is thin. On Oracle, nginx should preserve the Certbot-managed TLS server blocks and only add targeted SEO behavior:
+
+- proxy `/robots.txt`, `/sitemap.xml`, and `/llms.txt` to FastAPI
+- inject the public title, description, canonical link, and Open Graph tags into the initial Streamlit HTML with `sub_filter`
+- avoid overwriting `/etc/nginx/sites-available/ai-stock-arena` from `deploy-update.sh`, because Certbot manages the HTTPS certificate paths there
+
+Google Search Console still requires manual Google account access and DNS or HTML-file verification. After deployment, register the `aistockarena.com` domain property, verify ownership, submit `https://aistockarena.com/sitemap.xml`, then use URL Inspection for `https://aistockarena.com/`.
+
 ### Local-Only Oracle Helpers
 
 Some deployed hosts may contain ad hoc helper scripts that are intentionally not part of the normal deploy flow.

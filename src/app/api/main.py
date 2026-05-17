@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from app.api.query_service import (
@@ -77,6 +78,16 @@ runtime_config = load_runtime_config()
 settings = load_settings()
 
 
+def _public_site_url() -> str:
+    configured = (settings.api_base_url or "").rstrip("/")
+    if configured.endswith("/api"):
+        return configured[: -len("/api")]
+    return configured or "https://aistockarena.com"
+
+
+PUBLIC_SITE_URL = _public_site_url()
+
+
 def _warm_rankings_cache_once() -> None:
     def worker() -> None:
         try:
@@ -121,6 +132,55 @@ def require_admin(x_admin_token: str | None = Header(default=None, alias="X-Admi
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", app_name=runtime_config.app.name)
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse, include_in_schema=False)
+def robots_txt() -> PlainTextResponse:
+    body = "\n".join(
+        [
+            "User-agent: *",
+            "Allow: /",
+            "Disallow: /api/",
+            "Disallow: /_stcore/",
+            "",
+            f"Sitemap: {PUBLIC_SITE_URL}/sitemap.xml",
+            "",
+        ]
+    )
+    return PlainTextResponse(body, media_type="text/plain; charset=utf-8")
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+def sitemap_xml() -> Response:
+    body = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>{PUBLIC_SITE_URL}/</loc>
+    <changefreq>hourly</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>
+"""
+    return Response(content=body, media_type="application/xml; charset=utf-8")
+
+
+@app.get("/llms.txt", response_class=PlainTextResponse, include_in_schema=False)
+def llms_txt() -> PlainTextResponse:
+    body = "\n".join(
+        [
+            "# AI Stock Arena",
+            "",
+            "AI Stock Arena is a live LLM stock trading benchmark for KR and US markets.",
+            "It compares model decisions using shared market data, shared news context, simulated portfolios, trades, positions, and public benchmark APIs.",
+            "",
+            f"- Dashboard: {PUBLIC_SITE_URL}/",
+            f"- API base: {PUBLIC_SITE_URL}/api",
+            f"- Rankings: {PUBLIC_SITE_URL}/api/rankings?selected_only=true",
+            f"- Runtime status: {PUBLIC_SITE_URL}/api/scheduler-status",
+            "",
+        ]
+    )
+    return PlainTextResponse(body, media_type="text/plain; charset=utf-8")
 
 
 @app.get("/runtime-settings", response_model=RuntimeSettingsResponse)
