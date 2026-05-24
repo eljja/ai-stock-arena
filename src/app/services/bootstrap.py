@@ -46,6 +46,12 @@ def create_schema() -> None:
     ensure_operational_indexes(engine)
 
 
+def _as_utc_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def bootstrap_database(session: Session, sync_openrouter_models: bool = True) -> BootstrapSummary:
     runtime_config = load_runtime_config()
     settings = load_settings()
@@ -411,7 +417,7 @@ def auto_disable_inactive_models(session: Session, *, inactive_days: int = INACT
     messages: list[str] = []
     models = session.scalars(select(LLMModel).where(LLMModel.is_selected.is_(True)).order_by(LLMModel.model_id.asc())).all()
     for model in models:
-        metadata = model.metadata_json or {}
+        metadata = dict(model.metadata_json or {})
         if not is_model_api_enabled(model):
             continue
         if not bool(metadata.get("is_free_like", False)):
@@ -423,32 +429,49 @@ def auto_disable_inactive_models(session: Session, *, inactive_days: int = INACT
         latest_log = session.scalar(
             select(LLMDecisionLog).where(LLMDecisionLog.model_id == model.model_id).order_by(LLMDecisionLog.created_at.desc())
         )
-        candidates = [model.updated_at, model.created_at]
+        candidates = [model.created_at]
         if latest_run is not None:
             candidates.extend([latest_run.completed_at, latest_run.requested_at])
         if latest_log is not None:
             candidates.append(latest_log.created_at)
-        candidates = [value for value in candidates if value is not None]
+        candidates = [_as_utc_aware(value) for value in candidates if value is not None]
         last_active_at = max(candidates) if candidates else None
-        metadata["last_active_at"] = last_active_at.astimezone(UTC).isoformat() if last_active_at else None
+        last_active_at_text = last_active_at.astimezone(UTC).isoformat() if last_active_at else None
 
         if last_active_at is not None and last_active_at >= threshold:
+            changed = False
+            if metadata.get("last_active_at") != last_active_at_text:
+                metadata["last_active_at"] = last_active_at_text
+                changed = True
             if metadata.get("auto_disabled_inactive"):
                 metadata.pop("auto_disabled_inactive", None)
                 metadata.pop("inactive_since", None)
                 if metadata.get("status_note", "").startswith("Auto-disabled after"):
                     metadata.pop("status_note", None)
-            model.metadata_json = metadata
+                changed = True
+            if changed:
+                model.metadata_json = metadata
             continue
 
+        was_auto_disabled = bool(metadata.get("auto_disabled_inactive"))
+        metadata["last_active_at"] = last_active_at_text
         metadata["api_enabled"] = False
         metadata["auto_disabled_inactive"] = True
         metadata["inactive_since"] = now.astimezone(UTC).isoformat()
         metadata["status_note"] = f"Auto-disabled after {inactive_days} days without successful use. Re-enable manually to use again."
         model.metadata_json = metadata
-        message = f"Auto-disabled inactive model: {model.model_id}"
-        create_execution_event(session, event_type="model_maintenance", target_type="model", model_id=model.model_id, trigger_source="scheduler", status="success", message=message)
-        messages.append(message)
+        if not was_auto_disabled:
+            message = f"Auto-disabled inactive model: {model.model_id}"
+            create_execution_event(
+                session,
+                event_type="model_maintenance",
+                target_type="model",
+                model_id=model.model_id,
+                trigger_source="scheduler",
+                status="success",
+                message=message,
+            )
+            messages.append(message)
 
     session.flush()
     return messages

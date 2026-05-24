@@ -334,7 +334,9 @@ def _news_preview_rows(news_batches: list[dict], limit: int = 50) -> str:
     flattened.sort(key=lambda row: row["published_at"], reverse=True)
     rows = flattened[:limit]
     if not rows:
-        placeholder = html.escape("No shared news loaded yet. This area is reserved for the latest 50 normalized headlines.")
+        placeholder = html.escape(
+            "No shared news loaded yet. This area is reserved for the latest 40 normalized headlines."
+        )
         return f'<div class="asa-news-row"><div class="asa-news-time">pending</div><div class="asa-news-line" title="{placeholder}">{placeholder}</div></div>'
     html_rows = []
     for row in rows:
@@ -401,7 +403,7 @@ def _warm_lazy_sections(api_base_url: str | None, selected_only: bool, top_model
 
     def worker() -> None:
         try:
-            load_news_batches(api_base_url, limit=10)
+            load_news_batches(api_base_url, limit=40)
         except Exception:
             pass
         for market_code in ("KR", "US"):
@@ -799,7 +801,7 @@ def render_hero(settings_payload: dict, scheduler_payload: dict, rankings_df: pd
         leader = rankings_df.sort_values(by=["current_return_pct"], ascending=False, na_position="last").iloc[0]
         leader_name = html.escape(str(leader.get("display_name") or leader.get("model_id")))
         leader_return = _pct(leader.get("current_return_pct"))
-    news_rows = _news_preview_rows(news_batches, limit=50)
+    news_rows = _news_preview_rows(news_batches, limit=40)
     current_utc = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC")
     st.markdown(
         f"""
@@ -1433,7 +1435,7 @@ portfolios_df = _frame_with_columns(payload["portfolios"], ["model_id", "market_
 positions_df = _frame_with_columns(payload["positions"], ["model_id", "market_code", "ticker", "instrument_name", "quantity", "market_value", "avg_entry_price", "current_price"])
 trades_df = _frame_with_columns(payload["trades"], ["model_id", "market_code", "created_at", "ticker", "side", "gross_amount", "commission_amount", "tax_amount", "regulatory_fee_amount"])
 snapshots_df = _frame_with_columns(payload["snapshots"], ["model_id", "market_code", "created_at", "total_return_pct", "total_equity"])
-news_preview_batches = load_news_batches(api_base_url or None, limit=10)
+news_preview_batches = load_news_batches(api_base_url or None, limit=40)
 logs_all_df = _frame_with_columns(payload.get("logs", []), ["model_id", "market_code", "created_at", "estimated_cost_usd"])
 
 model_options = models_df["model_id"].tolist() if not models_df.empty else []
@@ -1856,8 +1858,8 @@ if active_section == "Admin":
 
         provider_rows = [
             provider_row("marketaux", "Marketaux", "15 min / 3 items", ["marketaux_api_token"], "MARKETAUX"),
-            provider_row("naver", "Naver", "30 min / 5 items", ["naver_client_id", "naver_client_secret"], "NAVER"),
-            provider_row("alpha_vantage", "Alpha Vantage", "30 min / 5 items", ["alpha_vantage_api_key"], "ALPHA_VANTAGE"),
+            provider_row("naver", "Naver", "20 min / 5 items", ["naver_client_id", "naver_client_secret"], "NAVER"),
+            provider_row("alpha_vantage", "Alpha Vantage", "20 min / 5 items", ["alpha_vantage_api_key"], "ALPHA_VANTAGE"),
         ]
         st.dataframe(pd.DataFrame(provider_rows), use_container_width=True, hide_index=True)
 

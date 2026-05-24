@@ -77,8 +77,8 @@ The live system is still being hardened around free-model behavior.
 The benchmark uses a provider-based shared news feed.
 
 - Marketaux: 15-minute cadence, up to 3 items per pull
-- Naver News: 30-minute cadence, up to 5 items per pull
-- Alpha Vantage: 30-minute cadence, latest 5 items per pull
+- Naver News: 20-minute cadence, up to 5 items per pull
+- Alpha Vantage: 20-minute cadence, latest 5 items per pull
 - News deduplication can be toggled from the admin panel while validating provider behavior
 
 Shared news is stored as a global feed. It is not split into separate KR and US scopes because market-moving news can affect both leagues.

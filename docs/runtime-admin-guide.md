@@ -64,8 +64,8 @@ Shared news is global benchmark context. It is not split by KR and US market sco
 Provider cadence:
 
 - Marketaux: every 15 minutes, up to 3 English items
-- Naver News: every 30 minutes, up to 5 items
-- Alpha Vantage: every 30 minutes, latest 5 items
+- Naver News: every 20 minutes, up to 5 items
+- Alpha Vantage: every 20 minutes, latest 5 items
 
 Behavior:
 
@@ -119,7 +119,7 @@ The admin section exposes concise execution events for:
 - scheduler-driven work
 - success, empty, partial, and error states
 
-The log is paged with a visible limit so it remains usable as it grows.
+The log is paged with a visible limit so it remains usable as it grows. Scheduler maintenance also prunes execution events: general events are retained for 14 days, old model-maintenance events are retained for 24 hours, and duplicate inactive-model maintenance rows are collapsed.
 
 ## Public API Notes
 

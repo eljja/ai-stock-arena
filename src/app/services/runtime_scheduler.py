@@ -14,13 +14,14 @@ from app.market_data.screener import MarketScreener
 from app.orchestration.trading_cycle import TradingCycleService
 from app.services.bootstrap import auto_disable_inactive_models, create_schema, run_weekly_free_model_sync_if_due
 from app.services.admin import get_scheduler_status, is_model_api_enabled, update_market_scheduler_state
-from app.services.execution_events import create_execution_event
+from app.services.execution_events import create_execution_event, prune_execution_events
 from app.services.market_history import record_market_snapshot
 from app.services.run_requests import create_run_request, mark_run_request_finished, mark_run_request_started
 from app.services.shared_news import run_due_news_refreshes
 
 
 RANKINGS_CACHE_REFRESH_MINUTES = 15
+EXECUTION_EVENT_PRUNE_INTERVAL_MINUTES = 360
 
 
 class RuntimeSchedulerService:
@@ -41,6 +42,9 @@ class RuntimeSchedulerService:
         messages.extend(self._run_isolated_task("news_refresh", self._run_due_news_refreshes))
         messages.extend(self._run_isolated_task("free_model_sync", self._run_weekly_free_model_sync))
         messages.extend(self._run_isolated_task("inactive_model_cleanup", self._run_inactive_model_cleanup))
+        messages.extend(
+            self._run_isolated_task("execution_event_prune", self._prune_execution_events_if_due)
+        )
         messages.extend(self._run_isolated_task("rankings_cache_refresh", self._refresh_rankings_cache_if_due))
         with SessionLocal() as session:
             status = get_scheduler_status(session)
@@ -92,6 +96,42 @@ class RuntimeSchedulerService:
             messages = auto_disable_inactive_models(session)
             session.commit()
             return messages
+
+    def _prune_execution_events_if_due(self) -> list[str]:
+        with SessionLocal() as session:
+            latest = session.scalar(
+                select(ExecutionEvent.created_at)
+                .where(ExecutionEvent.event_type == "scheduler")
+                .where(ExecutionEvent.target_type == "maintenance")
+                .where(ExecutionEvent.code == "EXECUTION_EVENT_PRUNE")
+                .where(ExecutionEvent.status == "success")
+                .order_by(ExecutionEvent.created_at.desc())
+                .limit(1)
+            )
+            threshold = datetime.now(UTC) - timedelta(
+                minutes=EXECUTION_EVENT_PRUNE_INTERVAL_MINUTES
+            )
+            if latest is not None and latest > threshold:
+                return []
+            deleted = prune_execution_events(session)
+            total_deleted = sum(deleted.values())
+            message = (
+                "Pruned execution events: "
+                f"old={deleted['old']}, "
+                f"model_maintenance={deleted['model_maintenance']}, "
+                f"duplicate_model_maintenance={deleted['duplicate_model_maintenance']}."
+            )
+            create_execution_event(
+                session,
+                event_type="scheduler",
+                target_type="maintenance",
+                trigger_source="scheduler",
+                status="success",
+                code="EXECUTION_EVENT_PRUNE",
+                message=message,
+            )
+            session.commit()
+            return [message] if total_deleted > 0 else []
 
     def _refresh_rankings_cache_if_due(self) -> list[str]:
         with SessionLocal() as session:

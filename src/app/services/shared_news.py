@@ -23,8 +23,8 @@ LIVE_STRICT = "live_strict"
 GLOBAL_NEWS_SCOPE = "GLOBAL"
 PROVIDER_SPECS = {
     "marketaux": {"cadence_minutes": 15, "target_count": 3},
-    "naver": {"cadence_minutes": 30, "target_count": 5},
-    "alpha_vantage": {"cadence_minutes": 30, "target_count": 5},
+    "naver": {"cadence_minutes": 20, "target_count": 5},
+    "alpha_vantage": {"cadence_minutes": 20, "target_count": 5},
 }
 
 

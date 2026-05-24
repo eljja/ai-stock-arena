@@ -94,8 +94,8 @@ Shared news is global benchmark context. It is collected centrally and reused by
 Providers:
 
 - Marketaux: 15-minute cadence, up to 3 English items
-- Naver News: 30-minute cadence, up to 5 items
-- Alpha Vantage: 30-minute cadence, latest 5 items
+- Naver News: 20-minute cadence, up to 5 items
+- Alpha Vantage: 20-minute cadence, latest 5 items
 
 News deduplication is configurable from admin.
 
