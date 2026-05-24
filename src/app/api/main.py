@@ -3,10 +3,11 @@ from __future__ import annotations
 import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 
 from app.api.query_service import (
@@ -88,6 +89,8 @@ def _public_site_url() -> str:
 
 
 PUBLIC_SITE_URL = _public_site_url()
+ROOT = Path(__file__).resolve().parents[3]
+BRAND_ASSETS_DIR = ROOT / "assets" / "brand"
 
 
 def _warm_rankings_cache_once() -> None:
@@ -134,6 +137,29 @@ def require_admin(x_admin_token: str | None = Header(default=None, alias="X-Admi
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", app_name=runtime_config.app.name)
+
+
+def _brand_asset_response(filename: str, media_type: str) -> FileResponse:
+    return FileResponse(
+        BRAND_ASSETS_DIR / filename,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@app.get("/favicon.png", include_in_schema=False)
+def favicon_png() -> FileResponse:
+    return _brand_asset_response("favicon.png", "image/png")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon_ico() -> FileResponse:
+    return _brand_asset_response("favicon.ico", "image/x-icon")
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+def favicon_svg() -> FileResponse:
+    return _brand_asset_response("aistockarena-icon.svg", "image/svg+xml")
 
 
 @app.get("/robots.txt", response_class=PlainTextResponse, include_in_schema=False)

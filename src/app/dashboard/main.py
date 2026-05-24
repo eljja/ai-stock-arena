@@ -17,6 +17,7 @@ import httpx
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from PIL import Image
 
 from app.api.query_service import (
     get_overview,
@@ -68,7 +69,13 @@ PERIOD_MAP = {
     "1 day": "return_1d_pct",
 }
 
-st.set_page_config(page_title="AI Stock Arena", layout="wide", initial_sidebar_state="collapsed")
+APP_ICON = Image.open(ROOT / "assets" / "brand" / "favicon.png")
+st.set_page_config(
+    page_title="AI Stock Arena",
+    page_icon=APP_ICON,
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
 
 _WARM_CACHE_LOCK = threading.Lock()
