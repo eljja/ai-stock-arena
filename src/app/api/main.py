@@ -152,14 +152,29 @@ def favicon_png() -> FileResponse:
     return _brand_asset_response("favicon.png", "image/png")
 
 
+@app.head("/favicon.png", include_in_schema=False)
+def favicon_png_head() -> Response:
+    return Response(headers={"Cache-Control": "public, max-age=86400"}, media_type="image/png")
+
+
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon_ico() -> FileResponse:
     return _brand_asset_response("favicon.ico", "image/x-icon")
 
 
+@app.head("/favicon.ico", include_in_schema=False)
+def favicon_ico_head() -> Response:
+    return Response(headers={"Cache-Control": "public, max-age=86400"}, media_type="image/x-icon")
+
+
 @app.get("/favicon.svg", include_in_schema=False)
 def favicon_svg() -> FileResponse:
     return _brand_asset_response("aistockarena-icon.svg", "image/svg+xml")
+
+
+@app.head("/favicon.svg", include_in_schema=False)
+def favicon_svg_head() -> Response:
+    return Response(headers={"Cache-Control": "public, max-age=86400"}, media_type="image/svg+xml")
 
 
 @app.get("/robots.txt", response_class=PlainTextResponse, include_in_schema=False)
