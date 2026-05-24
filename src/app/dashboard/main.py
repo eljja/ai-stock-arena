@@ -28,6 +28,7 @@ from app.api.query_service import (
     list_market_price_history,
     list_models,
     list_news_batches,
+    list_news_items,
     list_portfolios,
     list_positions,
     list_run_requests,
@@ -174,13 +175,31 @@ def load_model_logs(api_base_url: str | None, model_id: str | None, market_code:
 @st.cache_data(ttl=30, show_spinner=False)
 def load_news_batches(api_base_url: str | None, limit: int = 10) -> list[dict]:
     if api_base_url:
-        with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-            response = client.get("/news", params={"limit": limit})
-            response.raise_for_status()
-            payload = response.json()
-            return payload if isinstance(payload, list) else []
+        try:
+            with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=8.0) as client:
+                response = client.get("/news", params={"limit": limit})
+                response.raise_for_status()
+                payload = response.json()
+                return payload if isinstance(payload, list) else []
+        except httpx.HTTPError:
+            return []
     with SessionLocal() as session:
         return [item.model_dump(mode="json") for item in list_news_batches(session=session, limit=limit)]
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_news_preview_items(api_base_url: str | None, limit: int = 40) -> list[dict]:
+    if api_base_url:
+        try:
+            with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=8.0) as client:
+                response = client.get("/news-items", params={"limit": limit})
+                response.raise_for_status()
+                payload = response.json()
+                return payload if isinstance(payload, list) else []
+        except httpx.HTTPError:
+            return []
+    with SessionLocal() as session:
+        return [item.model_dump(mode="json") for item in list_news_items(session=session, limit=limit)]
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -282,6 +301,7 @@ def refresh_all() -> None:
     load_base_data.clear()
     load_model_logs.clear()
     load_news_batches.clear()
+    load_news_preview_items.clear()
     load_model_runs.clear()
     load_model_trades.clear()
     load_execution_events.clear()
@@ -321,7 +341,10 @@ def _news_preview_rows(news_batches: list[dict], limit: int = 50) -> str:
     for batch in news_batches or []:
         if not isinstance(batch, dict):
             continue
-        for item in batch.get("items", []):
+        source_items = batch.get("items")
+        if source_items is None and "title" in batch:
+            source_items = [batch]
+        for item in source_items or []:
             if not isinstance(item, dict):
                 continue
             published = str(item.get("published_at") or "")
@@ -410,7 +433,7 @@ def _warm_lazy_sections(api_base_url: str | None, selected_only: bool, top_model
 
     def worker() -> None:
         try:
-            load_news_batches(api_base_url, limit=40)
+            load_news_preview_items(api_base_url, limit=40)
         except Exception:
             pass
         for market_code in ("KR", "US"):
@@ -1442,7 +1465,7 @@ portfolios_df = _frame_with_columns(payload["portfolios"], ["model_id", "market_
 positions_df = _frame_with_columns(payload["positions"], ["model_id", "market_code", "ticker", "instrument_name", "quantity", "market_value", "avg_entry_price", "current_price"])
 trades_df = _frame_with_columns(payload["trades"], ["model_id", "market_code", "created_at", "ticker", "side", "gross_amount", "commission_amount", "tax_amount", "regulatory_fee_amount"])
 snapshots_df = _frame_with_columns(payload["snapshots"], ["model_id", "market_code", "created_at", "total_return_pct", "total_equity"])
-news_preview_batches = load_news_batches(api_base_url or None, limit=40)
+news_preview_batches = load_news_preview_items(api_base_url or None, limit=40)
 logs_all_df = _frame_with_columns(payload.get("logs", []), ["model_id", "market_code", "created_at", "estimated_cost_usd"])
 
 model_options = models_df["model_id"].tolist() if not models_df.empty else []

@@ -22,6 +22,7 @@ from app.api.query_service import (
     list_market_price_history,
     list_models,
     list_news_batches,
+    list_news_items,
     list_portfolios,
     list_positions,
     list_run_requests,
@@ -378,6 +379,15 @@ def news(
     session: Session = Depends(get_session),
 ) -> list[NewsBatchSummary]:
     return list_news_batches(session=session, market_code=market_code, limit=limit)
+
+
+@app.get("/news-items", response_model=list[NewsItemSummary])
+def news_items(
+    market_code: str | None = Query(default=None),
+    limit: int = Query(default=40, ge=1, le=100),
+    session: Session = Depends(get_session),
+) -> list[NewsItemSummary]:
+    return list_news_items(session=session, market_code=market_code, limit=limit)
 
 
 @app.get("/run-requests", response_model=list[RunRequestSummary])

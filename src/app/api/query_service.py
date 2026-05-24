@@ -515,6 +515,32 @@ def list_news_batches(
     ]
 
 
+def list_news_items(
+    session: Session,
+    market_code: str | None = None,
+    limit: int = 40,
+) -> list[NewsItemSummary]:
+    stmt = select(SharedNewsItem).order_by(
+        SharedNewsItem.published_at.desc().nullslast(),
+        SharedNewsItem.created_at.desc(),
+        SharedNewsItem.id.desc(),
+    )
+    if market_code:
+        stmt = stmt.where(SharedNewsItem.market_code == market_code)
+    items = session.scalars(stmt.limit(limit)).all()
+    return [
+        NewsItemSummary(
+            title=item.title,
+            summary=item.summary,
+            source=item.source,
+            url=item.url,
+            published_at=item.published_at,
+            tickers=list(item.tickers_json or []),
+        )
+        for item in items
+    ]
+
+
 def list_llm_logs(
     session: Session,
     model_id: str | None = None,
