@@ -175,7 +175,10 @@ def load_model_logs(api_base_url: str | None, model_id: str | None, market_code:
 def load_news_batches(api_base_url: str | None, limit: int = 10) -> list[dict]:
     if api_base_url:
         with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-            return client.get("/news", params={"limit": limit}).json()
+            response = client.get("/news", params={"limit": limit})
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, list) else []
     with SessionLocal() as session:
         return [item.model_dump(mode="json") for item in list_news_batches(session=session, limit=limit)]
 
@@ -316,7 +319,11 @@ def _weekday_labels(values: list[int]) -> str:
 def _news_preview_rows(news_batches: list[dict], limit: int = 50) -> str:
     flattened: list[dict[str, str]] = []
     for batch in news_batches or []:
+        if not isinstance(batch, dict):
+            continue
         for item in batch.get("items", []):
+            if not isinstance(item, dict):
+                continue
             published = str(item.get("published_at") or "")
             source = html.unescape(str(item.get("source") or "Unknown source"))
             title = html.unescape(str(item.get("title") or "Untitled"))

@@ -374,7 +374,7 @@ def market_price_history(
 @app.get("/news", response_model=list[NewsBatchSummary])
 def news(
     market_code: str | None = Query(default=None),
-    limit: int = Query(default=5, ge=1, le=20),
+    limit: int = Query(default=5, ge=1, le=50),
     session: Session = Depends(get_session),
 ) -> list[NewsBatchSummary]:
     return list_news_batches(session=session, market_code=market_code, limit=limit)
