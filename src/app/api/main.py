@@ -46,6 +46,7 @@ from app.api.schemas import (
     ModelSelectionUpdate,
     ModelSummary,
     NewsBatchSummary,
+    NewsItemSummary,
     OverviewResponse,
     PortfolioSummary,
     PositionSummary,
