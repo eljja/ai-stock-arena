@@ -286,6 +286,42 @@ def rankings(
     return rankings_payload
 
 
+@app.get("/dashboard-initial")
+def dashboard_initial(
+    response: Response,
+    selected_only: bool = Query(default=True),
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    rankings_payload, meta = get_rankings_with_meta(session=session, selected_only=selected_only)
+    cache_status = str(meta.get("cache_status") or "")
+    cache_updated_at = str(meta.get("cache_updated_at") or "")
+    if cache_status:
+        response.headers["X-Rankings-Cache-Status"] = cache_status
+    if cache_updated_at:
+        response.headers["X-Rankings-Cache-Updated-At"] = cache_updated_at
+    return {
+        "overview": get_overview(session=session, selected_only=selected_only).model_dump(mode="json"),
+        "settings": get_runtime_settings_response(session=session).model_dump(mode="json"),
+        "scheduler": get_scheduler_status_response(session=session).model_dump(mode="json"),
+        "models": [item.model_dump(mode="json") for item in list_models(session=session, selected_only=False)],
+        "rankings": [item.model_dump(mode="json") for item in rankings_payload],
+    }
+
+
+@app.get("/dashboard-performance")
+def dashboard_performance(
+    selected_only: bool = Query(default=True),
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    return {
+        "portfolios": [item.model_dump(mode="json") for item in list_portfolios(session=session, selected_only=selected_only)],
+        "positions": [item.model_dump(mode="json") for item in list_positions(session=session, selected_only=selected_only)],
+        "trades": [item.model_dump(mode="json") for item in list_trades(session=session, selected_only=selected_only, limit=200)],
+        "snapshots": [item.model_dump(mode="json") for item in list_snapshots(session=session, selected_only=selected_only, limit=2000)],
+        "logs": [item.model_dump(mode="json") for item in list_llm_logs(session=session, limit=200)],
+    }
+
+
 @app.get("/portfolios", response_model=list[PortfolioSummary])
 def portfolios(
     market_code: str | None = Query(default=None),

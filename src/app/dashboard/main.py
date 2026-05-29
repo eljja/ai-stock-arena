@@ -94,41 +94,48 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             "scheduler": {"markets": []},
             "models": [],
             "rankings": [],
-            "portfolios": [],
-            "positions": [],
-            "trades": [],
-            "snapshots": [],
-            "logs": [],
             "__rankings_stale_at": None,
-        }
-        request_specs = {
-            "overview": ("/overview", {"selected_only": str(selected_only).lower()}, 10.0),
-            "settings": ("/runtime-settings", None, 8.0),
-            "scheduler": ("/scheduler-status", None, 8.0),
-            "models": ("/models", {"selected_only": "false"}, 8.0),
-            "rankings": ("/rankings", {"selected_only": str(selected_only).lower()}, 18.0),
-            "portfolios": ("/portfolios", {"selected_only": str(selected_only).lower()}, 10.0),
-            "positions": ("/positions", {"selected_only": str(selected_only).lower()}, 10.0),
-            "trades": ("/trades", {"selected_only": str(selected_only).lower(), "limit": 200}, 12.0),
-            "snapshots": ("/snapshots", {"selected_only": str(selected_only).lower(), "limit": 2000}, 15.0),
-            "logs": ("/llm-logs", {"limit": 200}, 10.0),
         }
         with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
             payload: dict[str, object] = {}
-            for key, (path, params, timeout_seconds) in request_specs.items():
-                try:
-                    response = client.get(path, params=params, timeout=timeout_seconds)
-                    response.raise_for_status()
-                    payload[key] = response.json()
-                    if key == "rankings":
-                        cache_status = response.headers.get("X-Rankings-Cache-Status", "").strip().lower()
-                        cache_updated_at = response.headers.get("X-Rankings-Cache-Updated-At", "").strip()
-                        if cache_status == "stale":
-                            payload["__rankings_stale_at"] = cache_updated_at or None
-                            warnings.append("rankings: stale cache")
-                except Exception as exc:
-                    payload[key] = defaults[key]
-                    warnings.append(f"{key}: {exc.__class__.__name__}")
+            try:
+                response = client.get(
+                    "/dashboard-initial",
+                    params={"selected_only": str(selected_only).lower()},
+                    timeout=6.0,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                cache_status = response.headers.get("X-Rankings-Cache-Status", "").strip().lower()
+                cache_updated_at = response.headers.get("X-Rankings-Cache-Updated-At", "").strip()
+                if cache_status == "stale":
+                    payload["__rankings_stale_at"] = cache_updated_at or None
+                    warnings.append("rankings: stale cache")
+            except Exception as exc:
+                warnings.append(f"dashboard-initial: {exc.__class__.__name__}")
+                request_specs = {
+                    "overview": ("/overview", {"selected_only": str(selected_only).lower()}, 4.0),
+                    "settings": ("/runtime-settings", None, 4.0),
+                    "scheduler": ("/scheduler-status", None, 4.0),
+                    "models": ("/models", {"selected_only": "false"}, 4.0),
+                    "rankings": ("/rankings", {"selected_only": str(selected_only).lower()}, 6.0),
+                }
+                for key, (path, params, timeout_seconds) in request_specs.items():
+                    try:
+                        response = client.get(path, params=params, timeout=timeout_seconds)
+                        response.raise_for_status()
+                        payload[key] = response.json()
+                        if key == "rankings":
+                            cache_status = response.headers.get("X-Rankings-Cache-Status", "").strip().lower()
+                            cache_updated_at = response.headers.get("X-Rankings-Cache-Updated-At", "").strip()
+                            if cache_status == "stale":
+                                payload["__rankings_stale_at"] = cache_updated_at or None
+                                warnings.append("rankings: stale cache")
+                    except Exception as fallback_exc:
+                        payload[key] = defaults[key]
+                        warnings.append(f"{key}: {fallback_exc.__class__.__name__}")
+            for key, value in defaults.items():
+                payload.setdefault(key, value)
             payload["__warnings__"] = warnings
             return payload
 
@@ -145,14 +152,91 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             "scheduler": get_scheduler_status_response(session=session).model_dump(mode="json"),
             "models": [item.model_dump(mode="json") for item in list_models(session=session, selected_only=False)],
             "rankings": [item.model_dump(mode="json") for item in rankings_payload],
+            "__warnings__": local_warnings,
+            "__rankings_stale_at": rankings_stale_at,
+        }
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_performance_data(api_base_url: str | None, selected_only: bool) -> dict[str, object]:
+    defaults: dict[str, object] = {
+        "portfolios": [],
+        "positions": [],
+        "trades": [],
+        "snapshots": [],
+        "logs": [],
+        "__warnings__": [],
+    }
+    if api_base_url:
+        warnings: list[str] = []
+        with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+            try:
+                response = client.get(
+                    "/dashboard-performance",
+                    params={"selected_only": str(selected_only).lower()},
+                    timeout=12.0,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                for key, value in defaults.items():
+                    payload.setdefault(key, value)
+                payload["__warnings__"] = warnings
+                return payload
+            except Exception as exc:
+                warnings.append(f"dashboard-performance: {exc.__class__.__name__}")
+                request_specs = {
+                    "portfolios": ("/portfolios", {"selected_only": str(selected_only).lower()}, 8.0),
+                    "positions": ("/positions", {"selected_only": str(selected_only).lower()}, 8.0),
+                    "trades": ("/trades", {"selected_only": str(selected_only).lower(), "limit": 200}, 8.0),
+                    "snapshots": ("/snapshots", {"selected_only": str(selected_only).lower(), "limit": 2000}, 10.0),
+                    "logs": ("/llm-logs", {"limit": 200}, 8.0),
+                }
+                payload: dict[str, object] = {}
+                for key, (path, params, timeout_seconds) in request_specs.items():
+                    try:
+                        response = client.get(path, params=params, timeout=timeout_seconds)
+                        response.raise_for_status()
+                        payload[key] = response.json()
+                    except Exception as fallback_exc:
+                        payload[key] = defaults[key]
+                        warnings.append(f"{key}: {fallback_exc.__class__.__name__}")
+                payload["__warnings__"] = warnings
+                return payload
+
+    with SessionLocal() as session:
+        return {
             "portfolios": [item.model_dump(mode="json") for item in list_portfolios(session=session, selected_only=selected_only)],
             "positions": [item.model_dump(mode="json") for item in list_positions(session=session, selected_only=selected_only)],
             "trades": [item.model_dump(mode="json") for item in list_trades(session=session, selected_only=selected_only, limit=200)],
             "snapshots": [item.model_dump(mode="json") for item in list_snapshots(session=session, selected_only=selected_only, limit=2000)],
             "logs": [item.model_dump(mode="json") for item in list_llm_logs(session=session, limit=200)],
-            "__warnings__": local_warnings,
-            "__rankings_stale_at": rankings_stale_at,
+            "__warnings__": [],
         }
+
+
+def performance_frames(payload: dict[str, object], chosen_models: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    portfolios_df = _frame_with_columns(
+        payload.get("portfolios", []),
+        ["model_id", "market_code", "currency", "available_cash", "total_equity", "total_return_pct", "position_count"],
+    )
+    positions_df = _frame_with_columns(
+        payload.get("positions", []),
+        ["model_id", "market_code", "ticker", "instrument_name", "quantity", "market_value", "avg_entry_price", "current_price"],
+    )
+    trades_df = _frame_with_columns(
+        payload.get("trades", []),
+        ["model_id", "market_code", "created_at", "ticker", "side", "gross_amount", "commission_amount", "tax_amount", "regulatory_fee_amount"],
+    )
+    snapshots_df = _frame_with_columns(
+        payload.get("snapshots", []),
+        ["model_id", "market_code", "created_at", "total_return_pct", "total_equity"],
+    )
+    logs_df = _frame_with_columns(payload.get("logs", []), ["model_id", "market_code", "created_at", "estimated_cost_usd"])
+    if chosen_models:
+        for frame in (portfolios_df, positions_df, trades_df, snapshots_df, logs_df):
+            if "model_id" in frame.columns:
+                frame.drop(frame[~frame["model_id"].isin(chosen_models)].index, inplace=True)
+    return portfolios_df, positions_df, trades_df, snapshots_df, logs_df
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -217,6 +301,15 @@ def load_model_runs(api_base_url: str | None, model_id: str | None, market_code:
             item.model_dump(mode="json")
             for item in list_run_requests(session=session, model_id=model_id, market_code=market_code, limit=limit)
         ]
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_run_requests(api_base_url: str | None, limit: int = 100) -> list[dict]:
+    if api_base_url:
+        with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+            return client.get("/run-requests", params={"limit": limit}).json()
+    with SessionLocal() as session:
+        return [item.model_dump(mode="json") for item in list_run_requests(session=session, limit=limit)]
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -299,10 +392,12 @@ def load_market_fee_settings(api_base_url: str | None, admin_token: str) -> list
 
 def refresh_all() -> None:
     load_base_data.clear()
+    load_performance_data.clear()
     load_model_logs.clear()
     load_news_batches.clear()
     load_news_preview_items.clear()
     load_model_runs.clear()
+    load_run_requests.clear()
     load_model_trades.clear()
     load_execution_events.clear()
     load_market_fee_settings.clear()
@@ -487,14 +582,13 @@ def inject_styles() -> None:
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
         .stApp {
             background: radial-gradient(circle at top right, rgba(255,102,102,0.16), transparent 28%), radial-gradient(circle at bottom left, rgba(59,130,246,0.16), transparent 28%), linear-gradient(180deg, #07111f 0%, #0d1526 48%, #111827 100%);
             color: #eef2ff;
-            font-family: 'IBM Plex Sans', sans-serif;
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
         }
         h1, h2, h3, [data-testid="stMarkdownContainer"] h1, [data-testid="stMarkdownContainer"] h2 {
-            font-family: 'Space Grotesk', sans-serif;
+            font-family: "Segoe UI", Inter, Arial, sans-serif;
             letter-spacing: -0.03em;
             color: #f8fafc;
         }
@@ -616,9 +710,9 @@ def inject_styles() -> None:
             background: rgba(30, 41, 59, 0.95) !important;
             color: #f8fafc !important;
         }
-        .asa-signature { color: #94a3b8; font: 500 0.92rem 'IBM Plex Sans', sans-serif; white-space: nowrap; }
+        .asa-signature { color: #94a3b8; font: 500 0.92rem Inter, "Segoe UI", Arial, sans-serif; white-space: nowrap; }
         [data-testid="stTabs"] button {
-            font-family: 'Space Grotesk', sans-serif;
+            font-family: "Segoe UI", Inter, Arial, sans-serif;
             font-weight: 700;
         }
         .asa-hero {
@@ -630,14 +724,14 @@ def inject_styles() -> None:
             margin: 6px 0 18px 0;
         }
         .asa-eyebrow {
-            font: 700 0.78rem 'Space Grotesk', sans-serif;
+            font: 700 0.78rem "Segoe UI", Inter, Arial, sans-serif;
             text-transform: uppercase;
             letter-spacing: 0.18em;
             color: #67e8f9;
             margin-bottom: 10px;
         }
         .asa-headline {
-            font: 700 clamp(2rem, 4vw, 3.8rem) 'Space Grotesk', sans-serif;
+            font: 700 clamp(2rem, 4vw, 3.8rem) "Segoe UI", Inter, Arial, sans-serif;
             line-height: 0.95;
             margin: 0;
         }
@@ -681,7 +775,7 @@ def inject_styles() -> None:
             margin-bottom: 10px;
         }
         .asa-news-title {
-            font: 700 0.95rem 'Space Grotesk', sans-serif;
+            font: 700 0.95rem "Segoe UI", Inter, Arial, sans-serif;
             color: #f8fafc;
         }
         .asa-news-subtitle {
@@ -709,7 +803,7 @@ def inject_styles() -> None:
         }
         .asa-news-time {
             color: #67e8f9;
-            font: 600 0.74rem 'IBM Plex Sans', sans-serif;
+            font: 600 0.74rem Inter, "Segoe UI", Arial, sans-serif;
             white-space: nowrap;
             padding-top: 1px;
         }
@@ -735,17 +829,17 @@ def inject_styles() -> None:
             border-radius: 999px;
             border: 1px solid rgba(148, 163, 184, 0.22);
             background: rgba(15, 23, 42, 0.55);
-            font: 500 0.95rem 'IBM Plex Sans', sans-serif;
+            font: 500 0.95rem Inter, "Segoe UI", Arial, sans-serif;
             transition: color 120ms ease, border-color 120ms ease, opacity 120ms ease;
         }
         .asa-stat-label {
-            font: 600 0.76rem 'Space Grotesk', sans-serif;
+            font: 600 0.76rem "Segoe UI", Inter, Arial, sans-serif;
             text-transform: uppercase;
             letter-spacing: 0.1em;
             color: #94a3b8;
         }
         .asa-stat-value {
-            font: 700 1.25rem 'Space Grotesk', sans-serif;
+            font: 700 1.25rem "Segoe UI", Inter, Arial, sans-serif;
             margin-top: 6px;
             color: #f8fafc;
         }
@@ -759,7 +853,7 @@ def inject_styles() -> None:
         .asa-stat-value-sub {
             display: block;
             margin-top: 6px;
-            font: 700 0.95rem 'IBM Plex Sans', sans-serif;
+            font: 700 0.95rem Inter, "Segoe UI", Arial, sans-serif;
             color: #93c5fd;
         }
         .asa-podium {
@@ -770,13 +864,13 @@ def inject_styles() -> None:
             min-height: 196px;
         }
         .asa-podium-rank {
-            font: 700 0.74rem 'Space Grotesk', sans-serif;
+            font: 700 0.74rem "Segoe UI", Inter, Arial, sans-serif;
             letter-spacing: 0.18em;
             text-transform: uppercase;
             color: #fb7185;
         }
         .asa-podium-title {
-            font: 700 1.12rem 'Space Grotesk', sans-serif;
+            font: 700 1.12rem "Segoe UI", Inter, Arial, sans-serif;
             margin-top: 8px;
         }
         .asa-podium-id {
@@ -786,7 +880,7 @@ def inject_styles() -> None:
             word-break: break-word;
         }
         .asa-podium-metric {
-            font: 700 2rem 'Space Grotesk', sans-serif;
+            font: 700 2rem "Segoe UI", Inter, Arial, sans-serif;
             margin-top: 18px;
         }
         .asa-podium-grid {
@@ -798,7 +892,7 @@ def inject_styles() -> None:
             font-size: 0.84rem;
         }
         .asa-section-label {
-            font: 700 0.84rem 'Space Grotesk', sans-serif;
+            font: 700 0.84rem "Segoe UI", Inter, Arial, sans-serif;
             letter-spacing: 0.16em;
             text-transform: uppercase;
             color: #67e8f9;
@@ -1223,7 +1317,10 @@ def buy_sell_chart(trades_df: pd.DataFrame, market_filter: str, selected_models:
         return None
 
     trades = filtered_trades.copy()
-    trades["created_at"] = pd.to_datetime(trades["created_at"])
+    trades["created_at"] = pd.to_datetime(trades["created_at"], errors="coerce", utc=True)
+    trades = trades.dropna(subset=["created_at"])
+    if trades.empty:
+        return None
     trades["gross_amount"] = pd.to_numeric(trades["gross_amount"], errors="coerce").fillna(0.0)
     if market_filter == "All":
         trades["gross_amount"] = trades["gross_amount"] * trades["market_code"].map(lambda market: _market_fx_rate(market, fx_rates))
@@ -1274,27 +1371,33 @@ def overhead_chart(trades_df: pd.DataFrame, logs_df: pd.DataFrame, market_filter
 
     if not filtered_trades.empty:
         trades = filtered_trades.copy()
-        trades["created_at"] = pd.to_datetime(trades["created_at"])
-        trades[["commission_amount", "tax_amount", "regulatory_fee_amount"]] = trades[["commission_amount", "tax_amount", "regulatory_fee_amount"]].apply(pd.to_numeric, errors="coerce").fillna(0.0)
-        trades["trade_overhead"] = trades[["commission_amount", "tax_amount", "regulatory_fee_amount"]].sum(axis=1)
-        if market_filter == "All":
-            trades["trade_overhead"] = trades["trade_overhead"] * trades["market_code"].map(lambda market: _market_fx_rate(market, fx_rates))
-        trades["bucket"] = trades["created_at"].dt.floor("h")
-        fees = trades.groupby(["bucket", "model_id"], as_index=False)["trade_overhead"].sum()
-        fees["metric"] = "Trade overhead"
-        fees = fees.rename(columns={"bucket": "created_at", "trade_overhead": "value"})[["created_at", "model_id", "metric", "value"]]
-        frames.append(fees)
+        trades["created_at"] = pd.to_datetime(trades["created_at"], errors="coerce", utc=True)
+        trades = trades.dropna(subset=["created_at"])
+        if trades.empty:
+            filtered_trades = pd.DataFrame()
+        else:
+            trades[["commission_amount", "tax_amount", "regulatory_fee_amount"]] = trades[["commission_amount", "tax_amount", "regulatory_fee_amount"]].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+            trades["trade_overhead"] = trades[["commission_amount", "tax_amount", "regulatory_fee_amount"]].sum(axis=1)
+            if market_filter == "All":
+                trades["trade_overhead"] = trades["trade_overhead"] * trades["market_code"].map(lambda market: _market_fx_rate(market, fx_rates))
+            trades["bucket"] = trades["created_at"].dt.floor("h")
+            fees = trades.groupby(["bucket", "model_id"], as_index=False)["trade_overhead"].sum()
+            fees["metric"] = "Trade overhead"
+            fees = fees.rename(columns={"bucket": "created_at", "trade_overhead": "value"})[["created_at", "model_id", "metric", "value"]]
+            frames.append(fees)
     if not filtered_logs.empty:
         logs = filtered_logs.copy()
-        logs["created_at"] = pd.to_datetime(logs["created_at"])
-        logs["bucket"] = logs["created_at"].dt.floor("h")
-        logs["estimated_cost_usd"] = pd.to_numeric(logs["estimated_cost_usd"], errors="coerce").fillna(0.0)
-        if market_filter == "All":
-            logs["estimated_cost_usd"] = logs["estimated_cost_usd"] * _market_fx_rate("US", fx_rates)
-        token_cost = logs.groupby(["bucket", "model_id"], as_index=False)["estimated_cost_usd"].sum()
-        token_cost["metric"] = "LLM overhead"
-        token_cost = token_cost.rename(columns={"bucket": "created_at", "estimated_cost_usd": "value"})[["created_at", "model_id", "metric", "value"]]
-        frames.append(token_cost)
+        logs["created_at"] = pd.to_datetime(logs["created_at"], errors="coerce", utc=True)
+        logs = logs.dropna(subset=["created_at"])
+        if not logs.empty:
+            logs["bucket"] = logs["created_at"].dt.floor("h")
+            logs["estimated_cost_usd"] = pd.to_numeric(logs["estimated_cost_usd"], errors="coerce").fillna(0.0)
+            if market_filter == "All":
+                logs["estimated_cost_usd"] = logs["estimated_cost_usd"] * _market_fx_rate("US", fx_rates)
+            token_cost = logs.groupby(["bucket", "model_id"], as_index=False)["estimated_cost_usd"].sum()
+            token_cost["metric"] = "LLM overhead"
+            token_cost = token_cost.rename(columns={"bucket": "created_at", "estimated_cost_usd": "value"})[["created_at", "model_id", "metric", "value"]]
+            frames.append(token_cost)
     if not frames:
         return None
     cost_df = pd.concat(frames, ignore_index=True)
@@ -1461,12 +1564,12 @@ rankings_df = _frame_with_columns(
         "pricing_label",
     ],
 )
-portfolios_df = _frame_with_columns(payload["portfolios"], ["model_id", "market_code", "currency", "available_cash", "total_equity"])
-positions_df = _frame_with_columns(payload["positions"], ["model_id", "market_code", "ticker", "instrument_name", "quantity", "market_value", "avg_entry_price", "current_price"])
-trades_df = _frame_with_columns(payload["trades"], ["model_id", "market_code", "created_at", "ticker", "side", "gross_amount", "commission_amount", "tax_amount", "regulatory_fee_amount"])
-snapshots_df = _frame_with_columns(payload["snapshots"], ["model_id", "market_code", "created_at", "total_return_pct", "total_equity"])
-news_preview_batches = load_news_preview_items(api_base_url or None, limit=40)
-logs_all_df = _frame_with_columns(payload.get("logs", []), ["model_id", "market_code", "created_at", "estimated_cost_usd"])
+portfolios_df = _frame_with_columns([], ["model_id", "market_code", "currency", "available_cash", "total_equity", "total_return_pct", "position_count"])
+positions_df = _frame_with_columns([], ["model_id", "market_code", "ticker", "instrument_name", "quantity", "market_value", "avg_entry_price", "current_price"])
+trades_df = _frame_with_columns([], ["model_id", "market_code", "created_at", "ticker", "side", "gross_amount", "commission_amount", "tax_amount", "regulatory_fee_amount"])
+snapshots_df = _frame_with_columns([], ["model_id", "market_code", "created_at", "total_return_pct", "total_equity"])
+news_preview_batches: list[dict] = []
+logs_all_df = _frame_with_columns([], ["model_id", "market_code", "created_at", "estimated_cost_usd"])
 
 model_options = models_df["model_id"].tolist() if not models_df.empty else []
 default_models = models_df.loc[models_df["is_selected"], "model_id"].tolist() if not models_df.empty else []
@@ -1494,18 +1597,8 @@ if not chosen_models and model_options:
 if chosen_models:
     if "model_id" in rankings_df.columns:
         rankings_df = rankings_df[rankings_df["model_id"].isin(chosen_models)]
-    if "model_id" in portfolios_df.columns:
-        portfolios_df = portfolios_df[portfolios_df["model_id"].isin(chosen_models)]
-    if "model_id" in positions_df.columns:
-        positions_df = positions_df[positions_df["model_id"].isin(chosen_models)]
-    if "model_id" in trades_df.columns:
-        trades_df = trades_df[trades_df["model_id"].isin(chosen_models)]
-    if "model_id" in snapshots_df.columns:
-        snapshots_df = snapshots_df[snapshots_df["model_id"].isin(chosen_models)]
     if "model_id" in models_df.columns:
         models_df = models_df[models_df["model_id"].isin(chosen_models)]
-    if not logs_all_df.empty and "model_id" in logs_all_df.columns:
-        logs_all_df = logs_all_df[logs_all_df["model_id"].isin(chosen_models)]
 
 warm_top_model_id = None
 if not rankings_df.empty and "current_return_pct" in rankings_df.columns and "model_id" in rankings_df.columns:
@@ -1577,12 +1670,6 @@ if active_section == "Ranking":
         for idx, column in enumerate(podium_cols):
             if idx < len(top_rows):
                 column.markdown(render_podium_card(top_rows[idx], podium_labels[idx], period_label, sort_column), unsafe_allow_html=True)
-                allocation_df = model_allocation_frame(str(top_rows[idx]["model_id"]), positions_df, portfolios_df)
-                if allocation_df.empty:
-                    column.caption("No current holdings")
-                else:
-                    column.caption("Current allocation")
-                    column.altair_chart(allocation_chart(allocation_df), use_container_width=True)
             else:
                 column.empty()
         st.markdown(' <div class="asa-section-label">Full Ranking</div> ' , unsafe_allow_html=True)
@@ -1594,6 +1681,11 @@ if active_section == "Ranking":
 
 if active_section == "Performance":
     st.markdown('<div class="asa-section-label">Trajectory</div>', unsafe_allow_html=True)
+    performance_payload = load_performance_data(api_base_url or None, selected_only)
+    portfolios_df, positions_df, trades_df, snapshots_df, logs_all_df = performance_frames(performance_payload, chosen_models)
+    performance_warnings = performance_payload.get("__warnings__", [])
+    if performance_warnings:
+        st.warning("Performance loaded with partial API failures: " + ", ".join(str(item) for item in performance_warnings))
     metric_name = st.selectbox("Chart metric", ["total_return_pct", "total_equity"], index=0)
     performance_market = st.selectbox("Performance market", ["All", "KR", "US"], index=0)
     performance_default_models = chosen_models or model_options
@@ -1628,20 +1720,25 @@ if active_section == "Performance":
         if chart_df.empty:
             st.caption("No performance rows match the current filters.")
         else:
-            chart_df["created_at"] = pd.to_datetime(chart_df["created_at"])
-            x_zoom = alt.selection_interval(encodings=["x"], bind="scales")
-            charts = [performance_chart(chart_df, metric_name, performance_models, market_filter=performance_market, x_zoom=x_zoom, legend_selection=None, color_domain_models=model_options)]
-            buy_sell = buy_sell_chart(trades_df, performance_market, performance_models, fx_rates=fx_rates, x_zoom=x_zoom, legend_selection=None, color_domain_models=model_options)
-            if buy_sell is not None:
-                st.markdown("**Buy / Sell:** Solid line = Buy, dashed line = Sell.")
-                charts.append(buy_sell)
-            overhead = overhead_chart(trades_df, logs_all_df, performance_market, performance_models, fx_rates=fx_rates, x_zoom=x_zoom, legend_selection=None, color_domain_models=model_options)
-            if overhead is not None:
-                st.markdown("**Overhead:** Solid line = Trade overhead, dashed line = LLM overhead.")
-                charts.append(overhead)
-            performance_bundle = _apply_chart_theme(alt.vconcat(*charts, spacing=18).add_params(x_zoom))
-            chart_col, _ = st.columns([5, 1])
-            chart_col.altair_chart(performance_bundle, use_container_width=True)
+            chart_df["created_at"] = pd.to_datetime(chart_df["created_at"], errors="coerce", utc=True)
+            chart_df[metric_name] = pd.to_numeric(chart_df[metric_name], errors="coerce")
+            chart_df = chart_df.dropna(subset=["created_at", metric_name])
+            if chart_df.empty:
+                st.caption("No performance rows match the current filters.")
+            else:
+                x_zoom = alt.selection_interval(encodings=["x"], bind="scales")
+                charts = [performance_chart(chart_df, metric_name, performance_models, market_filter=performance_market, x_zoom=x_zoom, legend_selection=None, color_domain_models=model_options)]
+                buy_sell = buy_sell_chart(trades_df, performance_market, performance_models, fx_rates=fx_rates, x_zoom=x_zoom, legend_selection=None, color_domain_models=model_options)
+                if buy_sell is not None:
+                    st.markdown("**Buy / Sell:** Solid line = Buy, dashed line = Sell.")
+                    charts.append(buy_sell)
+                overhead = overhead_chart(trades_df, logs_all_df, performance_market, performance_models, fx_rates=fx_rates, x_zoom=x_zoom, legend_selection=None, color_domain_models=model_options)
+                if overhead is not None:
+                    st.markdown("**Overhead:** Solid line = Trade overhead, dashed line = LLM overhead.")
+                    charts.append(overhead)
+                performance_bundle = _apply_chart_theme(alt.vconcat(*charts, spacing=18).add_params(x_zoom))
+                chart_col, _ = st.columns([5, 1])
+                chart_col.altair_chart(performance_bundle, use_container_width=True)
 
 if active_section == "Market Pulse":
     st.markdown('<div class="asa-section-label">Market Pulse</div>', unsafe_allow_html=True)
@@ -1732,6 +1829,11 @@ if active_section == "Model Detail":
     if not model_options:
         st.info("No models available.")
     else:
+        performance_payload = load_performance_data(api_base_url or None, selected_only)
+        portfolios_df, positions_df, _trades_df, _snapshots_df, _logs_all_df = performance_frames(performance_payload, chosen_models)
+        detail_warnings = performance_payload.get("__warnings__", [])
+        if detail_warnings:
+            st.warning("Model detail loaded with partial API failures: " + ", ".join(str(item) for item in detail_warnings))
         detail_model = st.selectbox("Model", detail_model_options, index=0)
         detail_market = st.selectbox("Market", ["KR", "US"], index=0)
         model_logs = load_model_logs(api_base_url or None, detail_model, detail_market)
@@ -1856,6 +1958,7 @@ if active_section == "Admin":
         execution_event_limit = int(st.session_state.get("dashboard_execution_event_limit", 30))
         execution_events_payload = load_execution_events(api_base_url or None, execution_event_limit + 1, 0)
         execution_events_df = _frame_with_columns(execution_events_payload, ["event_type", "target_type", "model_id", "market_code", "trigger_source", "status", "code", "message", "created_at"])
+        runs_df = pd.DataFrame(load_run_requests(api_base_url or None, limit=100))
         scheduler_admin_df = _utc_frame(
             scheduler_df,
             ["last_started_at", "last_completed_at", "next_run_at", "news_last_started_at", "news_last_completed_at"],
