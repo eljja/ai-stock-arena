@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import sys
 import threading
 import time
@@ -54,6 +55,7 @@ from app.services.dashboard_snapshot import load_dashboard_snapshot_section
 from app.services.runtime_secrets import get_runtime_secrets, update_runtime_secrets
 
 settings = load_settings()
+ORACLE_API_BASE_URL = "http://138.2.49.114:8000"
 WEEKDAY_OPTIONS = [
     (0, "Mon"),
     (1, "Tue"),
@@ -83,6 +85,23 @@ st.set_page_config(
 _WARM_CACHE_LOCK = threading.Lock()
 _WARM_CACHE_LAST_RUN: dict[tuple, float] = {}
 _WARM_CACHE_TTL_SECONDS = 25.0
+
+
+def _streamlit_secret(name: str) -> str | None:
+    try:
+        value = st.secrets.get(name)
+    except Exception:
+        return None
+    return str(value).strip() if value else None
+
+
+def _default_api_base_url() -> str:
+    return (
+        _streamlit_secret("API_BASE_URL")
+        or os.getenv("API_BASE_URL", "").strip()
+        or (settings.api_base_url or "").strip()
+        or ORACLE_API_BASE_URL
+    )
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -1637,7 +1656,7 @@ def render_podium_card(row: pd.Series, label: str, period_label: str, period_col
 inject_styles()
 
 if "dashboard_api_base_url" not in st.session_state:
-    st.session_state["dashboard_api_base_url"] = settings.api_base_url or ""
+    st.session_state["dashboard_api_base_url"] = _default_api_base_url()
 if "dashboard_selected_only" not in st.session_state:
     st.session_state["dashboard_selected_only"] = True
 if "dashboard_admin_token" not in st.session_state:
