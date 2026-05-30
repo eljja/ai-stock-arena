@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,6 +29,8 @@ from app.db.models import AdminSetting
 DASHBOARD_SNAPSHOT_REFRESH_MINUTES = 30
 DASHBOARD_SNAPSHOT_VERSION = 1
 DASHBOARD_SNAPSHOT_KEY_PREFIX = "dashboard_snapshot_v1"
+ROOT = Path(__file__).resolve().parents[3]
+SNAPSHOT_DIR = Path(os.getenv("DASHBOARD_SNAPSHOT_DIR", ROOT / "tmp" / "dashboard_snapshots"))
 
 
 def dashboard_snapshot_key(
@@ -52,6 +58,14 @@ def load_dashboard_snapshot_section(
     selected_only: bool | None = None,
     market_code: str | None = None,
 ) -> dict[str, object] | None:
+    file_payload = _load_dashboard_snapshot_section_file(
+        section,
+        selected_only=selected_only,
+        market_code=market_code,
+    )
+    if file_payload is not None:
+        return file_payload
+
     setting = session.scalar(
         select(AdminSetting).where(
             AdminSetting.key == dashboard_snapshot_key(
@@ -125,8 +139,71 @@ def refresh_dashboard_snapshots(session: Session) -> list[str]:
             session.add(AdminSetting(key=key, value_json=payload))
         else:
             setting.value_json = payload
+    write_dashboard_snapshot_files(payloads)
     session.flush()
     return [f"Refreshed {len(payloads)} dashboard snapshot sections."]
+
+
+def write_dashboard_snapshot_files(payloads: list[tuple[str, dict[str, object]]]) -> None:
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    temp_paths: list[tuple[Path, Path]] = []
+    try:
+        for key, payload in payloads:
+            target_path = _snapshot_file_path_for_key(key)
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=SNAPSHOT_DIR,
+                prefix=f".{target_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+                handle.flush()
+                os.fsync(handle.fileno())
+                temp_path = Path(handle.name)
+            temp_paths.append((temp_path, target_path))
+        for temp_path, target_path in temp_paths:
+            temp_path.replace(target_path)
+    finally:
+        for temp_path, _target_path in temp_paths:
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+
+
+def _load_dashboard_snapshot_section_file(
+    section: str,
+    *,
+    selected_only: bool | None = None,
+    market_code: str | None = None,
+) -> dict[str, object] | None:
+    path = _snapshot_file_path_for_key(
+        dashboard_snapshot_key(
+            section,
+            selected_only=selected_only,
+            market_code=market_code,
+        )
+    )
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("version") != DASHBOARD_SNAPSHOT_VERSION:
+        return None
+    if selected_only is not None and bool(payload.get("selected_only")) != bool(selected_only):
+        return None
+    if market_code and str(payload.get("market_code") or "").upper() != market_code.upper():
+        return None
+    return payload
+
+
+def _snapshot_file_path_for_key(key: str) -> Path:
+    safe_name = key.replace(":", "__") + ".json"
+    return SNAPSHOT_DIR / safe_name
 
 
 def build_dashboard_snapshot_sections(
