@@ -51,6 +51,16 @@ OPERATIONAL_INDEXES = [
         "published_at, created_at",
     ),
     (
+        "ix_news_items_created_id",
+        "shared_news_items",
+        "created_at, id",
+    ),
+    (
+        "ix_news_items_market_created_id",
+        "shared_news_items",
+        "market_code, created_at, id",
+    ),
+    (
         "ix_news_batches_market_created",
         "shared_news_batches",
         "market_code, created_at",
