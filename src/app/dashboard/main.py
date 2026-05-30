@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 import time
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -28,7 +29,7 @@ st.set_page_config(
 
 
 def _render_fast_shell(api_base_url: str) -> None:
-    shell_css = """
+    shell_css = textwrap.dedent("""
     <style>
     .stApp {
         background: radial-gradient(circle at top right, rgba(255,102,102,0.16), transparent 28%), linear-gradient(180deg, #07111f 0%, #111827 100%);
@@ -64,7 +65,7 @@ def _render_fast_shell(api_base_url: str) -> None:
         .asa-fast-grid { grid-template-columns: 1fr; }
     }
     </style>
-    """
+    """)
     try:
         started = time.perf_counter()
         with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=3.0) as client:
@@ -124,29 +125,31 @@ def _render_fast_shell(api_base_url: str) -> None:
             f'<div class="asa-fast-news-row"><div class="asa-fast-news-time">{time_label}</div><div class="asa-fast-news-title" title="{title}">{title} · {source}</div></div>'
         )
     news_markup = "".join(news_rows) or '<div class="asa-fast-news-row"><div class="asa-fast-news-time">pending</div><div class="asa-fast-news-title">No shared news has been collected yet.</div></div>'
-    st.markdown(
-        shell_css
-        + f"""
+    shell_html = textwrap.dedent(
+        f"""
         <main class="asa-fast">
-            <div class="asa-fast-label">Pure Model Benchmark</div>
-            <h1>AI Stock Arena</h1>
-            <div class="asa-fast-sub">Rank LLMs by fee-adjusted return, drawdown, and execution cost. Same markets, same cadence, same rules.</div>
-            <div class="asa-fast-grid">
-                <div class="asa-fast-stat"><div class="asa-fast-label">Cadence</div><div class="asa-fast-value">Every {html.escape(str(settings_payload.get('decision_interval_minutes', 60)))} min</div></div>
-                <div class="asa-fast-stat"><div class="asa-fast-label">Current Leader</div><div class="asa-fast-value">{leader_name}<br>{html.escape(leader_return_label)}</div></div>
-                <div class="asa-fast-stat"><div class="asa-fast-label">Windows (UTC)</div><div class="asa-fast-value">{windows or 'n/a'}</div></div>
-            </div>
-            <div class="asa-fast-news">
-                <div class="asa-fast-label">Shared News Preview</div>
-                {news_markup}
-            </div>
-            <table class="asa-fast-table">
-                <thead><tr><th>#</th><th>Model</th><th>Profile</th><th>Return</th><th>KR</th><th>US</th></tr></thead>
-                <tbody>{table_rows}</tbody>
-            </table>
-            <div class="asa-fast-note">Models: {html.escape(str(overview.get('selected_model_count', len(rankings))))} active | Summary loaded in {elapsed_ms} ms</div>
+        <div class="asa-fast-label">Pure Model Benchmark</div>
+        <h1>AI Stock Arena</h1>
+        <div class="asa-fast-sub">Rank LLMs by fee-adjusted return, drawdown, and execution cost. Same markets, same cadence, same rules.</div>
+        <div class="asa-fast-grid">
+        <div class="asa-fast-stat"><div class="asa-fast-label">Cadence</div><div class="asa-fast-value">Every {html.escape(str(settings_payload.get('decision_interval_minutes', 60)))} min</div></div>
+        <div class="asa-fast-stat"><div class="asa-fast-label">Current Leader</div><div class="asa-fast-value">{leader_name}<br>{html.escape(leader_return_label)}</div></div>
+        <div class="asa-fast-stat"><div class="asa-fast-label">Windows (UTC)</div><div class="asa-fast-value">{windows or 'n/a'}</div></div>
+        </div>
+        <div class="asa-fast-news">
+        <div class="asa-fast-label">Shared News Preview</div>
+        {news_markup}
+        </div>
+        <table class="asa-fast-table">
+        <thead><tr><th>#</th><th>Model</th><th>Profile</th><th>Return</th><th>KR</th><th>US</th></tr></thead>
+        <tbody>{table_rows}</tbody>
+        </table>
+        <div class="asa-fast-note">Models: {html.escape(str(overview.get('selected_model_count', len(rankings))))} active | Summary loaded in {elapsed_ms} ms</div>
         </main>
-        """,
+        """
+    )
+    st.markdown(
+        shell_css + shell_html,
         unsafe_allow_html=True,
     )
     st.link_button("Open full dashboard", "?full=1")
