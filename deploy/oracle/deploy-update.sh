@@ -25,11 +25,4 @@ sudo systemctl restart ai-stock-arena-api.service
 sudo systemctl restart ai-stock-arena-dashboard.service
 sudo systemctl restart ai-stock-arena-scheduler.service
 
-for attempt in {1..12}; do
-  if curl -fsS "http://127.0.0.1:8000/dashboard-initial?selected_only=true" >/dev/null; then
-    break
-  fi
-  sleep 2
-done
-
 echo "Deployment complete for branch $BRANCH"

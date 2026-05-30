@@ -100,7 +100,6 @@ def _warm_rankings_cache_once() -> None:
         try:
             with SessionLocal() as session:
                 refresh_rankings_cache(session)
-                list_news_items(session=session, limit=8)
                 session.commit()
         except Exception:
             return
