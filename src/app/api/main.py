@@ -75,7 +75,7 @@ from app.services.admin import (
     update_model_runtime,
     update_runtime_settings,
 )
-from app.services.dashboard_snapshot import load_dashboard_snapshot, refresh_dashboard_snapshots
+from app.services.dashboard_snapshot import load_dashboard_snapshot_section, refresh_dashboard_snapshots
 from app.services.runtime_secrets import get_runtime_secrets, update_runtime_secrets
 
 runtime_config = load_runtime_config()
@@ -311,10 +311,17 @@ def dashboard_initial(
 
 @app.get("/dashboard-snapshot")
 def dashboard_snapshot(
+    section: str = Query(default="base"),
     selected_only: bool = Query(default=True),
+    market_code: str | None = Query(default=None),
     session: Session = Depends(get_session),
 ) -> dict[str, object]:
-    snapshot = load_dashboard_snapshot(session, selected_only=selected_only)
+    snapshot = load_dashboard_snapshot_section(
+        session,
+        section,
+        selected_only=None if section == "news" else selected_only,
+        market_code=market_code,
+    )
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Dashboard snapshot is not ready.")
     return snapshot
