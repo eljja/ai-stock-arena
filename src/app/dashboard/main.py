@@ -86,6 +86,33 @@ _WARM_CACHE_TTL_SECONDS = 25.0
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, object]:
+    def local_payload() -> dict[str, object]:
+        with SessionLocal() as session:
+            rankings_payload, rankings_meta = get_rankings_with_meta(
+                session=session,
+                selected_only=selected_only,
+            )
+            local_warnings: list[str] = []
+            rankings_stale_at = None
+            if rankings_meta.get("cache_status") == "stale":
+                rankings_stale_at = rankings_meta.get("cache_updated_at")
+                local_warnings.append("rankings: stale cache")
+            return {
+                "overview": get_overview(
+                    session=session,
+                    selected_only=selected_only,
+                ).model_dump(mode="json"),
+                "settings": get_runtime_settings_response(session=session).model_dump(mode="json"),
+                "scheduler": get_scheduler_status_response(session=session).model_dump(mode="json"),
+                "models": [
+                    item.model_dump(mode="json")
+                    for item in list_models(session=session, selected_only=False)
+                ],
+                "rankings": [item.model_dump(mode="json") for item in rankings_payload],
+                "__warnings__": local_warnings,
+                "__rankings_stale_at": rankings_stale_at,
+            }
+
     if api_base_url:
         warnings: list[str] = []
         defaults: dict[str, object] = {
@@ -113,6 +140,10 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
                     warnings.append("rankings: stale cache")
             except Exception as exc:
                 warnings.append(f"dashboard-initial: {exc.__class__.__name__}")
+                try:
+                    return local_payload()
+                except Exception:
+                    pass
                 request_specs = {
                     "overview": ("/overview", {"selected_only": str(selected_only).lower()}, 4.0),
                     "settings": ("/runtime-settings", None, 4.0),
@@ -134,27 +165,20 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
                     except Exception as fallback_exc:
                         payload[key] = defaults[key]
                         warnings.append(f"{key}: {fallback_exc.__class__.__name__}")
+            if warnings and all(
+                payload.get(key) == defaults[key]
+                for key in ("overview", "settings", "scheduler", "models", "rankings")
+            ):
+                try:
+                    return local_payload()
+                except Exception:
+                    pass
             for key, value in defaults.items():
                 payload.setdefault(key, value)
             payload["__warnings__"] = warnings
             return payload
 
-    with SessionLocal() as session:
-        rankings_payload, rankings_meta = get_rankings_with_meta(session=session, selected_only=selected_only)
-        local_warnings: list[str] = []
-        rankings_stale_at = None
-        if rankings_meta.get("cache_status") == "stale":
-            rankings_stale_at = rankings_meta.get("cache_updated_at")
-            local_warnings.append("rankings: stale cache")
-        return {
-            "overview": get_overview(session=session, selected_only=selected_only).model_dump(mode="json"),
-            "settings": get_runtime_settings_response(session=session).model_dump(mode="json"),
-            "scheduler": get_scheduler_status_response(session=session).model_dump(mode="json"),
-            "models": [item.model_dump(mode="json") for item in list_models(session=session, selected_only=False)],
-            "rankings": [item.model_dump(mode="json") for item in rankings_payload],
-            "__warnings__": local_warnings,
-            "__rankings_stale_at": rankings_stale_at,
-        }
+    return local_payload()
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -266,9 +290,12 @@ def load_news_batches(api_base_url: str | None, limit: int = 10) -> list[dict]:
                 payload = response.json()
                 return payload if isinstance(payload, list) else []
         except httpx.HTTPError:
-            return []
+            pass
     with SessionLocal() as session:
-        return [item.model_dump(mode="json") for item in list_news_batches(session=session, limit=limit)]
+        return [
+            item.model_dump(mode="json")
+            for item in list_news_batches(session=session, limit=limit)
+        ]
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -281,9 +308,12 @@ def load_news_preview_items(api_base_url: str | None, limit: int = 40) -> list[d
                 payload = response.json()
                 return payload if isinstance(payload, list) else []
         except httpx.HTTPError:
-            return []
+            pass
     with SessionLocal() as session:
-        return [item.model_dump(mode="json") for item in list_news_items(session=session, limit=limit)]
+        return [
+            item.model_dump(mode="json")
+            for item in list_news_items(session=session, limit=limit)
+        ]
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -1568,7 +1598,7 @@ portfolios_df = _frame_with_columns([], ["model_id", "market_code", "currency", 
 positions_df = _frame_with_columns([], ["model_id", "market_code", "ticker", "instrument_name", "quantity", "market_value", "avg_entry_price", "current_price"])
 trades_df = _frame_with_columns([], ["model_id", "market_code", "created_at", "ticker", "side", "gross_amount", "commission_amount", "tax_amount", "regulatory_fee_amount"])
 snapshots_df = _frame_with_columns([], ["model_id", "market_code", "created_at", "total_return_pct", "total_equity"])
-news_preview_batches: list[dict] = []
+news_preview_batches = load_news_preview_items(api_base_url or None, limit=40)
 logs_all_df = _frame_with_columns([], ["model_id", "market_code", "created_at", "estimated_cost_usd"])
 
 model_options = models_df["model_id"].tolist() if not models_df.empty else []
