@@ -11,8 +11,6 @@ from app.api.query_service import (
     get_runtime_settings_response,
     get_scheduler_status_response,
     list_llm_logs,
-    list_market_instruments,
-    list_market_price_history,
     list_models,
     list_news_batches,
     list_news_items,
@@ -82,15 +80,6 @@ def load_dashboard_snapshot(session: Session, *, selected_only: bool) -> dict[st
     allocation = load_dashboard_snapshot_section(session, "allocation", selected_only=selected_only)
     performance = load_dashboard_snapshot_section(session, "performance", selected_only=selected_only)
     news = load_dashboard_snapshot_section(session, "news")
-    market_pulse = {
-        market_code: load_dashboard_snapshot_section(
-            session,
-            "market_pulse",
-            selected_only=selected_only,
-            market_code=market_code,
-        )
-        for market_code in ("KR", "US")
-    }
     return {
         "version": DASHBOARD_SNAPSHOT_VERSION,
         "selected_only": selected_only,
@@ -98,9 +87,7 @@ def load_dashboard_snapshot(session: Session, *, selected_only: bool) -> dict[st
         "base": base.get("data", {}),
         "allocation": allocation.get("data", {}) if allocation else {},
         "performance": performance.get("data", {}) if performance else {},
-        "market_pulse": {
-            key: value.get("data", {}) for key, value in market_pulse.items() if value
-        },
+        "market_pulse": {},
         "news_preview_items": (news.get("data", {}) if news else {}).get("news_preview_items", []),
         "news_batches": (news.get("data", {}) if news else {}).get("news_batches", []),
     }
@@ -206,29 +193,6 @@ def build_dashboard_snapshot_sections(
         "__warnings__": [],
         "__snapshot_generated_at": generated_at,
     }
-    market_pulse = {
-        market_code: {
-            "history": [
-                item.model_dump(mode="json")
-                for item in list_market_price_history(
-                    session=session,
-                    market_code=market_code,
-                    selected_only=selected_only,
-                    top_n=20,
-                    limit_per_ticker=0,
-                )
-            ],
-            "instruments": [
-                item.model_dump(mode="json")
-                for item in list_market_instruments(
-                    session=session,
-                    market_code=market_code,
-                    active_only=False,
-                )
-            ],
-        }
-        for market_code in ("KR", "US")
-    }
     sections: list[tuple[str, dict[str, object]]] = [
         (
             dashboard_snapshot_key("base", selected_only=selected_only),
@@ -253,23 +217,6 @@ def build_dashboard_snapshot_sections(
             ),
         ),
     ]
-    for market_code, data in market_pulse.items():
-        sections.append(
-            (
-                dashboard_snapshot_key(
-                    "market_pulse",
-                    selected_only=selected_only,
-                    market_code=market_code,
-                ),
-                _section_payload(
-                    "market_pulse",
-                    data,
-                    generated_at=generated_at,
-                    selected_only=selected_only,
-                    market_code=market_code,
-                ),
-            )
-        )
     return sections
 
 

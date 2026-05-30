@@ -456,16 +456,6 @@ def load_model_trades(api_base_url: str | None, model_id: str | None, market_cod
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_market_history(api_base_url: str | None, market_code: str, selected_only: bool, top_n: int = 20, limit_per_ticker: int = 0, tickers: tuple[str, ...] | None = None) -> list[dict]:
-    if not tickers and top_n == 20 and limit_per_ticker == 0:
-        snapshot = load_dashboard_snapshot_payload(
-            "market_pulse",
-            selected_only,
-            market_code,
-        )
-        snapshot_data = snapshot.get("data") if snapshot else None
-        if isinstance(snapshot_data, dict) and isinstance(snapshot_data.get("history"), list):
-            return snapshot_data["history"]
-
     if api_base_url:
         with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
             return client.get(
@@ -494,15 +484,6 @@ def load_market_history(api_base_url: str | None, market_code: str, selected_onl
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_market_instrument_registry(api_base_url: str | None, market_code: str) -> list[dict]:
-    snapshot = load_dashboard_snapshot_payload(
-        "market_pulse",
-        True,
-        market_code,
-    )
-    snapshot_data = snapshot.get("data") if snapshot else None
-    if isinstance(snapshot_data, dict) and isinstance(snapshot_data.get("instruments"), list):
-        return snapshot_data["instruments"]
-
     if api_base_url:
         with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
             return client.get("/market-instruments", params={"market_code": market_code}).json()
