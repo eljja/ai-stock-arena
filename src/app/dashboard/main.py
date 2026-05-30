@@ -50,6 +50,7 @@ from app.services.admin import (
     update_model_runtime,
     update_runtime_settings,
 )
+from app.services.dashboard_snapshot import load_dashboard_snapshot_section
 from app.services.runtime_secrets import get_runtime_secrets, update_runtime_secrets
 
 settings = load_settings()
@@ -85,7 +86,29 @@ _WARM_CACHE_TTL_SECONDS = 25.0
 
 
 @st.cache_data(ttl=30, show_spinner=False)
+def load_dashboard_snapshot_payload(
+    section: str,
+    selected_only: bool | None = None,
+    market_code: str | None = None,
+) -> dict[str, object] | None:
+    try:
+        with SessionLocal() as session:
+            return load_dashboard_snapshot_section(
+                session,
+                section,
+                selected_only=selected_only,
+                market_code=market_code,
+            )
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=30, show_spinner=False)
 def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, object]:
+    snapshot = load_dashboard_snapshot_payload("base", selected_only)
+    if snapshot and isinstance(snapshot.get("data"), dict):
+        return dict(snapshot["data"])
+
     def local_payload() -> dict[str, object]:
         with SessionLocal() as session:
             rankings_payload, rankings_meta = get_rankings_with_meta(
@@ -193,6 +216,10 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_performance_data(api_base_url: str | None, selected_only: bool) -> dict[str, object]:
+    snapshot = load_dashboard_snapshot_payload("performance", selected_only)
+    if snapshot and isinstance(snapshot.get("data"), dict):
+        return dict(snapshot["data"])
+
     defaults: dict[str, object] = {
         "portfolios": [],
         "positions": [],
@@ -250,6 +277,10 @@ def load_performance_data(api_base_url: str | None, selected_only: bool) -> dict
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_allocation_data(api_base_url: str | None, selected_only: bool) -> dict[str, object]:
+    snapshot = load_dashboard_snapshot_payload("allocation", selected_only)
+    if snapshot and isinstance(snapshot.get("data"), dict):
+        return dict(snapshot["data"])
+
     try:
         with SessionLocal() as session:
             return {
@@ -326,6 +357,12 @@ def load_model_logs(api_base_url: str | None, model_id: str | None, market_code:
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_news_batches(api_base_url: str | None, limit: int = 10) -> list[dict]:
+    snapshot = load_dashboard_snapshot_payload("news")
+    snapshot_data = snapshot.get("data") if snapshot else None
+    snapshot_batches = snapshot_data.get("news_batches") if isinstance(snapshot_data, dict) else None
+    if isinstance(snapshot_batches, list):
+        return snapshot_batches[:limit]
+
     try:
         with SessionLocal() as session:
             return [
@@ -348,6 +385,12 @@ def load_news_batches(api_base_url: str | None, limit: int = 10) -> list[dict]:
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_news_preview_items(api_base_url: str | None, limit: int = 40) -> list[dict]:
+    snapshot = load_dashboard_snapshot_payload("news")
+    snapshot_data = snapshot.get("data") if snapshot else None
+    snapshot_items = snapshot_data.get("news_preview_items") if isinstance(snapshot_data, dict) else None
+    if isinstance(snapshot_items, list):
+        return snapshot_items[:limit]
+
     try:
         with SessionLocal() as session:
             return [
@@ -413,6 +456,16 @@ def load_model_trades(api_base_url: str | None, model_id: str | None, market_cod
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_market_history(api_base_url: str | None, market_code: str, selected_only: bool, top_n: int = 20, limit_per_ticker: int = 0, tickers: tuple[str, ...] | None = None) -> list[dict]:
+    if not tickers and top_n == 20 and limit_per_ticker == 0:
+        snapshot = load_dashboard_snapshot_payload(
+            "market_pulse",
+            selected_only,
+            market_code,
+        )
+        snapshot_data = snapshot.get("data") if snapshot else None
+        if isinstance(snapshot_data, dict) and isinstance(snapshot_data.get("history"), list):
+            return snapshot_data["history"]
+
     if api_base_url:
         with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
             return client.get(
@@ -441,6 +494,15 @@ def load_market_history(api_base_url: str | None, market_code: str, selected_onl
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_market_instrument_registry(api_base_url: str | None, market_code: str) -> list[dict]:
+    snapshot = load_dashboard_snapshot_payload(
+        "market_pulse",
+        True,
+        market_code,
+    )
+    snapshot_data = snapshot.get("data") if snapshot else None
+    if isinstance(snapshot_data, dict) and isinstance(snapshot_data.get("instruments"), list):
+        return snapshot_data["instruments"]
+
     if api_base_url:
         with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
             return client.get("/market-instruments", params={"market_code": market_code}).json()
@@ -473,6 +535,7 @@ def load_market_fee_settings(api_base_url: str | None, admin_token: str) -> list
 
 
 def refresh_all() -> None:
+    load_dashboard_snapshot_payload.clear()
     load_base_data.clear()
     load_performance_data.clear()
     load_allocation_data.clear()
@@ -482,6 +545,8 @@ def refresh_all() -> None:
     load_model_runs.clear()
     load_run_requests.clear()
     load_model_trades.clear()
+    load_market_history.clear()
+    load_market_instrument_registry.clear()
     load_execution_events.clear()
     load_market_fee_settings.clear()
     load_admin_secrets.clear()

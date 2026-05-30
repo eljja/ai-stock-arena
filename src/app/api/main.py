@@ -75,6 +75,7 @@ from app.services.admin import (
     update_model_runtime,
     update_runtime_settings,
 )
+from app.services.dashboard_snapshot import load_dashboard_snapshot, refresh_dashboard_snapshots
 from app.services.runtime_secrets import get_runtime_secrets, update_runtime_secrets
 
 runtime_config = load_runtime_config()
@@ -306,6 +307,17 @@ def dashboard_initial(
         "models": [item.model_dump(mode="json") for item in list_models(session=session, selected_only=False)],
         "rankings": [item.model_dump(mode="json") for item in rankings_payload],
     }
+
+
+@app.get("/dashboard-snapshot")
+def dashboard_snapshot(
+    selected_only: bool = Query(default=True),
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    snapshot = load_dashboard_snapshot(session, selected_only=selected_only)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Dashboard snapshot is not ready.")
+    return snapshot
 
 
 @app.get("/dashboard-performance")
@@ -561,6 +573,16 @@ def admin_refresh_news(
     session: Session = Depends(get_session),
 ) -> AdminActionResponse:
     messages = run_manual_news_refreshes(session=session, market_code=market_code.upper() if market_code else None)
+    return AdminActionResponse(messages=messages)
+
+
+@app.post("/admin/dashboard-snapshot/refresh", response_model=AdminActionResponse)
+def admin_refresh_dashboard_snapshot(
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> AdminActionResponse:
+    messages = refresh_dashboard_snapshots(session=session)
+    session.commit()
     return AdminActionResponse(messages=messages)
 
 

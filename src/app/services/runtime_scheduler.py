@@ -14,6 +14,10 @@ from app.market_data.screener import MarketScreener
 from app.orchestration.trading_cycle import TradingCycleService
 from app.services.bootstrap import auto_disable_inactive_models, create_schema, run_weekly_free_model_sync_if_due
 from app.services.admin import get_scheduler_status, is_model_api_enabled, update_market_scheduler_state
+from app.services.dashboard_snapshot import (
+    DASHBOARD_SNAPSHOT_REFRESH_MINUTES,
+    refresh_dashboard_snapshots,
+)
 from app.services.execution_events import create_execution_event, prune_execution_events
 from app.services.market_history import record_market_snapshot
 from app.services.run_requests import create_run_request, mark_run_request_finished, mark_run_request_started
@@ -45,6 +49,7 @@ class RuntimeSchedulerService:
         messages.extend(
             self._run_isolated_task("execution_event_prune", self._prune_execution_events_if_due)
         )
+        messages.extend(self._run_isolated_task("dashboard_snapshot_refresh", self._refresh_dashboard_snapshot_if_due))
         messages.extend(self._run_isolated_task("rankings_cache_refresh", self._refresh_rankings_cache_if_due))
         with SessionLocal() as session:
             status = get_scheduler_status(session)
@@ -132,6 +137,33 @@ class RuntimeSchedulerService:
             )
             session.commit()
             return [message] if total_deleted > 0 else []
+
+    def _refresh_dashboard_snapshot_if_due(self) -> list[str]:
+        with SessionLocal() as session:
+            latest = session.scalar(
+                select(ExecutionEvent.created_at)
+                .where(ExecutionEvent.event_type == "scheduler")
+                .where(ExecutionEvent.target_type == "maintenance")
+                .where(ExecutionEvent.code == "DASHBOARD_SNAPSHOT")
+                .where(ExecutionEvent.status == "success")
+                .order_by(ExecutionEvent.created_at.desc())
+                .limit(1)
+            )
+            threshold = datetime.now(UTC) - timedelta(minutes=DASHBOARD_SNAPSHOT_REFRESH_MINUTES)
+            if latest is not None and latest > threshold:
+                return []
+            messages = refresh_dashboard_snapshots(session)
+            create_execution_event(
+                session,
+                event_type="scheduler",
+                target_type="maintenance",
+                trigger_source="scheduler",
+                status="success",
+                code="DASHBOARD_SNAPSHOT",
+                message=" ".join(messages),
+            )
+            session.commit()
+            return messages
 
     def _refresh_rankings_cache_if_due(self) -> list[str]:
         with SessionLocal() as session:
