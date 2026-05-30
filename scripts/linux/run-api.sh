@@ -6,4 +6,4 @@ VENV_PYTHON="$ROOT_DIR/.venv/bin/python"
 
 cd "$ROOT_DIR"
 export PYTHONPATH="$ROOT_DIR/src"
-exec "$VENV_PYTHON" -m uvicorn app.api.main:app --app-dir src --host 127.0.0.1 --port 8000
+exec "$VENV_PYTHON" -m uvicorn app.api.main:app --app-dir src --host 127.0.0.1 --port 8000 --workers "${API_WORKERS:-2}"

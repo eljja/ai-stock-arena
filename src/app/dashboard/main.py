@@ -115,6 +115,11 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
 
     if api_base_url:
         warnings: list[str] = []
+        local_warning: str | None = None
+        try:
+            return local_payload()
+        except Exception as exc:
+            local_warning = f"local-db: {exc.__class__.__name__}"
         defaults: dict[str, object] = {
             "overview": {"markets": [], "top_models": [], "headline_metrics": {}},
             "settings": {},
@@ -142,8 +147,8 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
                 warnings.append(f"dashboard-initial: {exc.__class__.__name__}")
                 try:
                     return local_payload()
-                except Exception:
-                    pass
+                except Exception as local_exc:
+                    local_warning = local_warning or f"local-db: {local_exc.__class__.__name__}"
                 request_specs = {
                     "overview": ("/overview", {"selected_only": str(selected_only).lower()}, 4.0),
                     "settings": ("/runtime-settings", None, 4.0),
@@ -171,10 +176,15 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             ):
                 try:
                     return local_payload()
-                except Exception:
-                    pass
+                except Exception as local_exc:
+                    local_warning = local_warning or f"local-db: {local_exc.__class__.__name__}"
             for key, value in defaults.items():
                 payload.setdefault(key, value)
+            if local_warning and all(
+                payload.get(key) == defaults[key]
+                for key in ("overview", "settings", "scheduler", "models", "rankings")
+            ):
+                warnings.insert(0, local_warning)
             payload["__warnings__"] = warnings
             return payload
 
@@ -282,6 +292,14 @@ def load_model_logs(api_base_url: str | None, model_id: str | None, market_code:
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_news_batches(api_base_url: str | None, limit: int = 10) -> list[dict]:
+    try:
+        with SessionLocal() as session:
+            return [
+                item.model_dump(mode="json")
+                for item in list_news_batches(session=session, limit=limit)
+            ]
+    except Exception:
+        pass
     if api_base_url:
         try:
             with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=8.0) as client:
@@ -291,15 +309,19 @@ def load_news_batches(api_base_url: str | None, limit: int = 10) -> list[dict]:
                 return payload if isinstance(payload, list) else []
         except httpx.HTTPError:
             pass
-    with SessionLocal() as session:
-        return [
-            item.model_dump(mode="json")
-            for item in list_news_batches(session=session, limit=limit)
-        ]
+    return []
 
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_news_preview_items(api_base_url: str | None, limit: int = 40) -> list[dict]:
+    try:
+        with SessionLocal() as session:
+            return [
+                item.model_dump(mode="json")
+                for item in list_news_items(session=session, limit=limit)
+            ]
+    except Exception:
+        pass
     if api_base_url:
         try:
             with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=8.0) as client:
@@ -309,11 +331,7 @@ def load_news_preview_items(api_base_url: str | None, limit: int = 40) -> list[d
                 return payload if isinstance(payload, list) else []
         except httpx.HTTPError:
             pass
-    with SessionLocal() as session:
-        return [
-            item.model_dump(mode="json")
-            for item in list_news_items(session=session, limit=limit)
-        ]
+    return []
 
 
 @st.cache_data(ttl=30, show_spinner=False)
