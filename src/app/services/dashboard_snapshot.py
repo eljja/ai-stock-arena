@@ -117,10 +117,7 @@ def _section_payload(
 
 def refresh_dashboard_snapshots(session: Session) -> list[str]:
     payloads: list[tuple[str, dict[str, object]]] = []
-    for selected_only in (True, False):
-        payloads.extend(
-            build_dashboard_snapshot_sections(session=session, selected_only=selected_only)
-        )
+    payloads.extend(build_dashboard_snapshot_sections(session=session, selected_only=True))
     payloads.append(build_news_snapshot_section(session=session))
     for key, payload in payloads:
         setting = session.scalar(select(AdminSetting).where(AdminSetting.key == key))
