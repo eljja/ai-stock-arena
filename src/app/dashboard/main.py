@@ -245,7 +245,41 @@ def load_performance_data(api_base_url: str | None, selected_only: bool) -> dict
             "snapshots": [item.model_dump(mode="json") for item in list_snapshots(session=session, selected_only=selected_only, limit=2000)],
             "logs": [item.model_dump(mode="json") for item in list_llm_logs(session=session, limit=200)],
             "__warnings__": [],
-        }
+    }
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_allocation_data(api_base_url: str | None, selected_only: bool) -> dict[str, object]:
+    try:
+        with SessionLocal() as session:
+            return {
+                "portfolios": [
+                    item.model_dump(mode="json")
+                    for item in list_portfolios(session=session, selected_only=selected_only)
+                ],
+                "positions": [
+                    item.model_dump(mode="json")
+                    for item in list_positions(session=session, selected_only=selected_only)
+                ],
+            }
+    except Exception:
+        pass
+    if api_base_url:
+        payload: dict[str, object] = {"portfolios": [], "positions": []}
+        with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
+            for key, path in {"portfolios": "/portfolios", "positions": "/positions"}.items():
+                try:
+                    response = client.get(
+                        path,
+                        params={"selected_only": str(selected_only).lower()},
+                        timeout=8.0,
+                    )
+                    response.raise_for_status()
+                    payload[key] = response.json()
+                except Exception:
+                    payload[key] = []
+        return payload
+    return {"portfolios": [], "positions": []}
 
 
 def performance_frames(payload: dict[str, object], chosen_models: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -441,6 +475,7 @@ def load_market_fee_settings(api_base_url: str | None, admin_token: str) -> list
 def refresh_all() -> None:
     load_base_data.clear()
     load_performance_data.clear()
+    load_allocation_data.clear()
     load_model_logs.clear()
     load_news_batches.clear()
     load_news_preview_items.clear()
@@ -1612,8 +1647,9 @@ rankings_df = _frame_with_columns(
         "pricing_label",
     ],
 )
-portfolios_df = _frame_with_columns([], ["model_id", "market_code", "currency", "available_cash", "total_equity", "total_return_pct", "position_count"])
-positions_df = _frame_with_columns([], ["model_id", "market_code", "ticker", "instrument_name", "quantity", "market_value", "avg_entry_price", "current_price"])
+allocation_payload = load_allocation_data(api_base_url or None, selected_only)
+portfolios_df = _frame_with_columns(allocation_payload.get("portfolios", []), ["model_id", "market_code", "currency", "available_cash", "total_equity", "total_return_pct", "position_count"])
+positions_df = _frame_with_columns(allocation_payload.get("positions", []), ["model_id", "market_code", "ticker", "instrument_name", "quantity", "market_value", "avg_entry_price", "current_price"])
 trades_df = _frame_with_columns([], ["model_id", "market_code", "created_at", "ticker", "side", "gross_amount", "commission_amount", "tax_amount", "regulatory_fee_amount"])
 snapshots_df = _frame_with_columns([], ["model_id", "market_code", "created_at", "total_return_pct", "total_equity"])
 news_preview_batches = load_news_preview_items(api_base_url or None, limit=40)
@@ -1718,6 +1754,12 @@ if active_section == "Ranking":
         for idx, column in enumerate(podium_cols):
             if idx < len(top_rows):
                 column.markdown(render_podium_card(top_rows[idx], podium_labels[idx], period_label, sort_column), unsafe_allow_html=True)
+                allocation_df = model_allocation_frame(str(top_rows[idx]["model_id"]), positions_df, portfolios_df)
+                if allocation_df.empty:
+                    column.caption("No current holdings")
+                else:
+                    column.caption("Current allocation")
+                    column.altair_chart(allocation_chart(allocation_df), use_container_width=True)
             else:
                 column.empty()
         st.markdown(' <div class="asa-section-label">Full Ranking</div> ' , unsafe_allow_html=True)
