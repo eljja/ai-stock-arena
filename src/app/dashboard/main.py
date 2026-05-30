@@ -1730,15 +1730,6 @@ if chosen_models:
     if "model_id" in models_df.columns:
         models_df = models_df[models_df["model_id"].isin(chosen_models)]
 
-warm_top_model_id = None
-if not rankings_df.empty and "current_return_pct" in rankings_df.columns and "model_id" in rankings_df.columns:
-    _ranked_for_warmup = rankings_df.copy()
-    _ranked_for_warmup["current_return_pct"] = pd.to_numeric(_ranked_for_warmup["current_return_pct"], errors="coerce")
-    _ranked_for_warmup = _ranked_for_warmup.sort_values(by=["current_return_pct", "model_id"], ascending=[False, True], na_position="last")
-    if not _ranked_for_warmup.empty:
-        warm_top_model_id = str(_ranked_for_warmup.iloc[0]["model_id"])
-_warm_lazy_sections(api_base_url or None, selected_only, warm_top_model_id, str(st.session_state.get("dashboard_admin_token", "")) or None)
-
 render_hero(settings_payload, scheduler_payload, rankings_df, news_preview_batches)
 if dashboard_load_warnings:
     st.warning("Dashboard loaded with partial API failures: " + ", ".join(dashboard_load_warnings))
