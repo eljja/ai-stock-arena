@@ -305,7 +305,6 @@ def dashboard_initial(
         "scheduler": get_scheduler_status_response(session=session).model_dump(mode="json"),
         "models": [item.model_dump(mode="json") for item in list_models(session=session, selected_only=False)],
         "rankings": [item.model_dump(mode="json") for item in rankings_payload],
-        "news_items": [item.model_dump(mode="json") for item in list_news_items(session=session, limit=8)],
     }
 
 

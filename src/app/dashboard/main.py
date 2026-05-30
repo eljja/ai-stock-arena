@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import html
 import json
-import os
 import sys
 import threading
 import time
@@ -13,153 +12,12 @@ SRC_ROOT = ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+import altair as alt
 import httpx
+import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image
-
-APP_ICON = Image.open(ROOT / "assets" / "brand" / "favicon.png")
-st.set_page_config(
-    page_title="AI Stock Arena",
-    page_icon=APP_ICON,
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
-
-def _render_fast_shell(api_base_url: str) -> None:
-    shell_css = """
-    <style>
-    .stApp {
-        background: radial-gradient(circle at top right, rgba(255,102,102,0.16), transparent 28%), linear-gradient(180deg, #07111f 0%, #111827 100%);
-        color: #eef2ff;
-        font-family: Inter, "Segoe UI", Arial, sans-serif;
-    }
-    .asa-fast {
-        max-width: 1120px;
-        margin: 42px auto 28px auto;
-        padding: 30px;
-        border-radius: 24px;
-        background: linear-gradient(135deg, rgba(12, 23, 40, 0.98), rgba(19, 34, 56, 0.92));
-        border: 1px solid rgba(148, 163, 184, 0.16);
-        box-shadow: 0 24px 60px rgba(2, 6, 23, 0.45);
-    }
-    .asa-fast h1 { margin: 0; font-size: 3.3rem; line-height: 0.95; }
-    .asa-fast-sub { color: #94a3b8; margin: 14px 0 24px 0; }
-    .asa-fast-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-    .asa-fast-stat { padding: 14px 16px; border-radius: 16px; background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(148, 163, 184, 0.16); }
-    .asa-fast-label { color: #67e8f9; font-size: 0.76rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
-    .asa-fast-value { margin-top: 8px; color: #f8fafc; font-weight: 800; font-size: 1.15rem; }
-    .asa-fast-table { width: 100%; border-collapse: collapse; margin-top: 24px; font-size: 0.92rem; }
-    .asa-fast-table th, .asa-fast-table td { padding: 10px 12px; border-bottom: 1px solid rgba(148, 163, 184, 0.13); text-align: left; }
-    .asa-fast-table th { color: #94a3b8; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; }
-    .asa-fast-news { margin-top: 18px; padding: 16px; border-radius: 16px; background: rgba(15, 23, 42, 0.58); border: 1px solid rgba(148, 163, 184, 0.14); }
-    .asa-fast-news-row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 10px; padding: 4px 0; }
-    .asa-fast-news-time { color: #67e8f9; font-size: 0.76rem; white-space: nowrap; }
-    .asa-fast-news-title { color: #dbeafe; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .asa-fast-note { margin-top: 18px; color: #94a3b8; font-size: 0.86rem; }
-    @media (max-width: 760px) {
-        .asa-fast { margin: 16px 0; padding: 20px; }
-        .asa-fast h1 { font-size: 2.3rem; }
-        .asa-fast-grid { grid-template-columns: 1fr; }
-    }
-    </style>
-    """
-    try:
-        started = time.perf_counter()
-        with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=3.0) as client:
-            response = client.get("/dashboard-initial", params={"selected_only": "true"}, timeout=3.0)
-            response.raise_for_status()
-            payload = response.json()
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-    except Exception as exc:
-        st.error(f"Dashboard summary is temporarily unavailable: {exc.__class__.__name__}")
-        return
-
-    settings_payload = payload.get("settings") or {}
-    scheduler_payload = payload.get("scheduler") or {}
-    overview = payload.get("overview") or {}
-    rankings = payload.get("rankings") or []
-    news_items = payload.get("news_items") or []
-    windows = "<br>".join(
-        f"{html.escape(str(item.get('market_code')))}: {html.escape(str(item.get('window_label_utc') or 'n/a'))}"
-        for item in scheduler_payload.get("markets", [])
-        if isinstance(item, dict)
-    )
-    leader = rankings[0] if rankings else {}
-    leader_name = html.escape(str(leader.get("display_name") or leader.get("model_id") or "No active model"))
-    leader_return = leader.get("current_return_pct")
-    leader_return_label = "n/a" if leader_return is None else f"{float(leader_return):.2f}%"
-
-    def pct_cell(value: object) -> str:
-        if value is None:
-            return "n/a"
-        try:
-            return f"{float(value):.2f}%"
-        except (TypeError, ValueError):
-            return "n/a"
-
-    rows = []
-    for idx, row in enumerate(rankings[:15], start=1):
-        rows.append(
-            "<tr>"
-            f"<td>{idx}</td>"
-            f"<td>{html.escape(str(row.get('display_name') or row.get('model_id')))}</td>"
-            f"<td>{html.escape(str(row.get('model_id') or ''))}</td>"
-            f"<td>{pct_cell(row.get('current_return_pct'))}</td>"
-            f"<td>{pct_cell(row.get('kr_return_pct'))}</td>"
-            f"<td>{pct_cell(row.get('us_return_pct'))}</td>"
-            "</tr>"
-        )
-    table_rows = "".join(rows) or '<tr><td colspan="6">No ranking data available.</td></tr>'
-    news_rows = []
-    for item in news_items[:8]:
-        if not isinstance(item, dict):
-            continue
-        published = str(item.get("published_at") or "")
-        time_label = html.escape(published[2:16].replace("T", " ") if published else "No time")
-        title = html.escape(str(item.get("title") or item.get("summary") or "Untitled"))
-        source = html.escape(str(item.get("source") or "Unknown source"))
-        news_rows.append(
-            f'<div class="asa-fast-news-row"><div class="asa-fast-news-time">{time_label}</div><div class="asa-fast-news-title" title="{title}">{title} · {source}</div></div>'
-        )
-    news_markup = "".join(news_rows) or '<div class="asa-fast-news-row"><div class="asa-fast-news-time">pending</div><div class="asa-fast-news-title">No shared news has been collected yet.</div></div>'
-    st.markdown(
-        shell_css
-        + f"""
-        <main class="asa-fast">
-            <div class="asa-fast-label">Pure Model Benchmark</div>
-            <h1>AI Stock Arena</h1>
-            <div class="asa-fast-sub">Rank LLMs by fee-adjusted return, drawdown, and execution cost. Same markets, same cadence, same rules.</div>
-            <div class="asa-fast-grid">
-                <div class="asa-fast-stat"><div class="asa-fast-label">Cadence</div><div class="asa-fast-value">Every {html.escape(str(settings_payload.get('decision_interval_minutes', 60)))} min</div></div>
-                <div class="asa-fast-stat"><div class="asa-fast-label">Current Leader</div><div class="asa-fast-value">{leader_name}<br>{html.escape(leader_return_label)}</div></div>
-                <div class="asa-fast-stat"><div class="asa-fast-label">Windows (UTC)</div><div class="asa-fast-value">{windows or 'n/a'}</div></div>
-            </div>
-            <div class="asa-fast-news">
-                <div class="asa-fast-label">Shared News Preview</div>
-                {news_markup}
-            </div>
-            <table class="asa-fast-table">
-                <thead><tr><th>#</th><th>Model</th><th>Profile</th><th>Return</th><th>KR</th><th>US</th></tr></thead>
-                <tbody>{table_rows}</tbody>
-            </table>
-            <div class="asa-fast-note">Models: {html.escape(str(overview.get('selected_model_count', len(rankings))))} active | Summary loaded in {elapsed_ms} ms</div>
-        </main>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.link_button("Open full dashboard", "?full=1")
-
-
-_FAST_SHELL_API_BASE_URL = os.getenv("API_BASE_URL", "").strip()
-_FAST_SHELL_ENABLED = os.getenv("DASHBOARD_FAST_SHELL", "1").lower() not in {"0", "false", "no"}
-if _FAST_SHELL_API_BASE_URL and _FAST_SHELL_ENABLED and st.query_params.get("full") != "1":
-    _render_fast_shell(_FAST_SHELL_API_BASE_URL)
-    st.stop()
-
-import altair as alt
-import pandas as pd
 
 from app.api.query_service import (
     get_overview,
@@ -212,6 +70,15 @@ PERIOD_MAP = {
     "1 day": "return_1d_pct",
 }
 
+APP_ICON = Image.open(ROOT / "assets" / "brand" / "favicon.png")
+st.set_page_config(
+    page_title="AI Stock Arena",
+    page_icon=APP_ICON,
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+
 _WARM_CACHE_LOCK = threading.Lock()
 _WARM_CACHE_LAST_RUN: dict[tuple, float] = {}
 _WARM_CACHE_TTL_SECONDS = 25.0
@@ -227,7 +94,6 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             "scheduler": {"markets": []},
             "models": [],
             "rankings": [],
-            "news_items": [],
             "__rankings_stale_at": None,
         }
         with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
@@ -286,7 +152,6 @@ def load_base_data(api_base_url: str | None, selected_only: bool) -> dict[str, o
             "scheduler": get_scheduler_status_response(session=session).model_dump(mode="json"),
             "models": [item.model_dump(mode="json") for item in list_models(session=session, selected_only=False)],
             "rankings": [item.model_dump(mode="json") for item in rankings_payload],
-            "news_items": [item.model_dump(mode="json") for item in list_news_items(session=session, limit=8)],
             "__warnings__": local_warnings,
             "__rankings_stale_at": rankings_stale_at,
         }
@@ -1703,7 +1568,7 @@ portfolios_df = _frame_with_columns([], ["model_id", "market_code", "currency", 
 positions_df = _frame_with_columns([], ["model_id", "market_code", "ticker", "instrument_name", "quantity", "market_value", "avg_entry_price", "current_price"])
 trades_df = _frame_with_columns([], ["model_id", "market_code", "created_at", "ticker", "side", "gross_amount", "commission_amount", "tax_amount", "regulatory_fee_amount"])
 snapshots_df = _frame_with_columns([], ["model_id", "market_code", "created_at", "total_return_pct", "total_equity"])
-news_preview_batches = payload.get("news_items", [])
+news_preview_batches: list[dict] = []
 logs_all_df = _frame_with_columns([], ["model_id", "market_code", "created_at", "estimated_cost_usd"])
 
 model_options = models_df["model_id"].tolist() if not models_df.empty else []

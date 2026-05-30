@@ -521,6 +521,7 @@ def list_news_items(
     limit: int = 40,
 ) -> list[NewsItemSummary]:
     stmt = select(SharedNewsItem).order_by(
+        SharedNewsItem.published_at.desc().nullslast(),
         SharedNewsItem.created_at.desc(),
         SharedNewsItem.id.desc(),
     )
