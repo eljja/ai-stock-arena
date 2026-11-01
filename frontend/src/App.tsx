@@ -6,6 +6,7 @@ import { PerformanceChart } from './components/PerformanceChart';
 import { NewsWall } from './components/NewsWall';
 import { TradeFeed } from './components/TradeFeed';
 import { ModelDetailModal } from './components/ModelDetailModal';
+import { MarketSoundtrackPlayer } from './components/MarketSoundtrackPlayer';
 import { api } from './services/api';
 import {
   ModelRanking,
@@ -15,6 +16,7 @@ import {
   NewsItemSummary,
   LLMDecisionLogSummary,
   SnapshotSummary,
+  MarketSoundtrack,
 } from './types';
 import { Trophy, LineChart, Newspaper, Activity, Sparkles } from 'lucide-react';
 
@@ -27,6 +29,7 @@ export function App() {
   const [newsItems, setNewsItems] = useState<NewsItemSummary[]>([]);
   const [llmLogs, setLlmLogs] = useState<LLMDecisionLogSummary[]>([]);
   const [snapshots, setSnapshots] = useState<SnapshotSummary[]>([]);
+  const [soundtracks, setSoundtracks] = useState<MarketSoundtrack[]>([]);
 
   const [selectedModel, setSelectedModel] = useState<ModelRanking | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -45,6 +48,7 @@ export function App() {
         newsData,
         logsData,
         snapshotsData,
+        soundtracksData,
       ] = await Promise.all([
         api.getRankings(),
         api.getPortfolios(),
@@ -53,6 +57,7 @@ export function App() {
         api.getNewsItems(30),
         api.getLLMLogs(30),
         api.getSnapshots(300),
+        api.getMarketSoundtracks().catch(() => []),
       ]);
 
       setRankings(rankingsData);
@@ -62,6 +67,9 @@ export function App() {
       setNewsItems(newsData);
       setLlmLogs(logsData);
       setSnapshots(snapshotsData);
+      if (soundtracksData && soundtracksData.length > 0) {
+        setSoundtracks(soundtracksData);
+      }
       setLastUpdated(new Date());
     } catch (err: any) {
       console.error('Data fetch error:', err);
@@ -107,6 +115,13 @@ export function App() {
 
         {/* Hero Spotlight (Top 3 Podium & Platform Stats) */}
         <HeroPodium rankings={rankings} onSelectModel={setSelectedModel} />
+
+        {/* AI Daily Market Soundtrack Player */}
+        {soundtracks.length > 0 && (
+          <div className="mb-8">
+            <MarketSoundtrackPlayer soundtracks={soundtracks} />
+          </div>
+        )}
 
         {/* Section Navigation Tabs */}
         <div className="flex items-center gap-2 mb-6 pb-2 border-b border-slate-800/80 overflow-x-auto">

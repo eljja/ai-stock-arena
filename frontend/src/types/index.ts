@@ -98,6 +98,21 @@ export interface SnapshotSummary {
   cash?: number;
 }
 
+export interface MarketSoundtrack {
+  id: string;
+  market: 'KR' | 'US';
+  market_name: string;
+  date: string;
+  title: string;
+  genre: string;
+  bpm: number;
+  key: string;
+  mood: string;
+  audio_url: string;
+  duration_sec: number;
+  summary: string;
+}
+
 export interface SchedulerMarketStatus {
   market_code: string;
   market_timezone: string;

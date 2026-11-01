@@ -7,6 +7,7 @@ import {
   NewsItemSummary,
   LLMDecisionLogSummary,
   SnapshotSummary,
+  MarketSoundtrack,
 } from '../types';
 
 const API_BASE = '/api';
@@ -61,8 +62,14 @@ export const api = {
   },
 
   async getSchedulerStatus(): Promise<any> {
-    const res = await fetch(`${API_BASE}/scheduler`);
+    const res = await fetch(`${API_BASE}/scheduler-status`);
     if (!res.ok) throw new Error(`Failed to load scheduler status: ${res.statusText}`);
+    return res.json();
+  },
+
+  async getMarketSoundtracks(): Promise<MarketSoundtrack[]> {
+    const res = await fetch(`${API_BASE}/market-soundtracks`);
+    if (!res.ok) throw new Error(`Failed to load market soundtracks: ${res.statusText}`);
     return res.json();
   },
 };

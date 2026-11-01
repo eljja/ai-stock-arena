@@ -10,6 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 
+from app.services.soundtrack_service import get_soundtracks, DATA_DIR
+
 from app.api.query_service import (
     get_copy_trade,
     get_overview,
@@ -450,6 +452,19 @@ def copy_trade(
         return get_copy_trade(session=session, model_id=model_id, market_code=market_code)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/market-soundtracks")
+def market_soundtracks():
+    return get_soundtracks()
+
+
+@app.get("/soundtracks/{filename}")
+def stream_soundtrack(filename: str):
+    file_path = DATA_DIR / filename
+    if not file_path.exists() or not filename.endswith(".wav"):
+        raise HTTPException(status_code=404, detail="Soundtrack not found")
+    return FileResponse(file_path, media_type="audio/wav", filename=filename)
 
 
 @app.get("/admin/settings", response_model=RuntimeSettingsResponse)
