@@ -459,7 +459,7 @@ def market_soundtracks():
     return get_soundtracks()
 
 
-@app.get("/soundtracks/{filename}")
+@app.api_route("/soundtracks/{filename}", methods=["GET", "HEAD"])
 def stream_soundtrack(filename: str):
     file_path = DATA_DIR / filename
     if not file_path.exists() or not filename.endswith(".wav"):

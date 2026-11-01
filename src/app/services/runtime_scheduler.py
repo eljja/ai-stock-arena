@@ -52,6 +52,7 @@ class RuntimeSchedulerService:
             self._run_isolated_task("execution_event_prune", self._prune_execution_events_if_due)
         )
         messages.extend(self._run_isolated_task("rankings_cache_refresh", self._refresh_rankings_cache_if_due))
+        messages.extend(self._run_isolated_task("daily_soundtracks", self._run_daily_soundtracks_if_due))
         with SessionLocal() as session:
             status = get_scheduler_status(session)
         due_markets = [item["market_code"] for item in status["markets"] if item["enabled"] and item["is_due"]]
@@ -165,6 +166,24 @@ class RuntimeSchedulerService:
             )
             session.commit()
             return ["Refreshed rankings cache."]
+
+    def _run_daily_soundtracks_if_due(self) -> list[str]:
+        from app.services.soundtrack_service import generate_daily_soundtracks_if_due
+        messages = generate_daily_soundtracks_if_due()
+        if messages:
+            with SessionLocal() as session:
+                for msg in messages:
+                    create_execution_event(
+                        session,
+                        event_type="scheduler",
+                        target_type="maintenance",
+                        trigger_source="scheduler",
+                        status="success",
+                        code="DAILY_SOUNDTRACK_GEN",
+                        message=msg,
+                    )
+                session.commit()
+        return messages
 
     def run_market_cycle(self, market_code: str, *, trigger_source: str = "scheduler") -> str:
         started_at = datetime.now(UTC)
