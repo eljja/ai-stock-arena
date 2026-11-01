@@ -24,6 +24,12 @@ RANKINGS_CACHE_REFRESH_MINUTES = 15
 EXECUTION_EVENT_PRUNE_INTERVAL_MINUTES = 360
 
 
+def _as_utc_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 class RuntimeSchedulerService:
     def __init__(self) -> None:
         self.provider = YahooMarketDataProvider()
@@ -111,7 +117,7 @@ class RuntimeSchedulerService:
             threshold = datetime.now(UTC) - timedelta(
                 minutes=EXECUTION_EVENT_PRUNE_INTERVAL_MINUTES
             )
-            if latest is not None and latest > threshold:
+            if latest is not None and _as_utc_aware(latest) > threshold:
                 return []
             deleted = prune_execution_events(session)
             total_deleted = sum(deleted.values())
@@ -145,7 +151,7 @@ class RuntimeSchedulerService:
                 .limit(1)
             )
             threshold = datetime.now(UTC) - timedelta(minutes=RANKINGS_CACHE_REFRESH_MINUTES)
-            if latest is not None and latest > threshold:
+            if latest is not None and _as_utc_aware(latest) > threshold:
                 return []
             refresh_rankings_cache(session)
             create_execution_event(

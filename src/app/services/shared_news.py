@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 
 from app.db.models import AdminSetting, ExecutionEvent, SharedNewsBatch, SharedNewsItem
 from app.news.alpha_vantage import AlphaVantageNewsClient
+from app.news.dedup import is_duplicate_article, news_item_keys, register_article_keys
 from app.news.marketaux import MarketauxNewsClient
 from app.news.naver import NaverNewsClient
+from app.news.saveticker import SaveTickerNewsClient
 from app.services.admin import get_runtime_settings
 from app.services.execution_events import create_execution_event
 
@@ -24,6 +26,7 @@ GLOBAL_NEWS_SCOPE = "GLOBAL"
 PROVIDER_SPECS = {
     "marketaux": {"cadence_minutes": 15, "target_count": 3},
     "naver": {"cadence_minutes": 20, "target_count": 5},
+    "saveticker": {"cadence_minutes": 15, "target_count": 5},
     "alpha_vantage": {"cadence_minutes": 20, "target_count": 5},
 }
 
@@ -81,7 +84,7 @@ def run_due_news_refreshes(session: Session) -> list[str]:
     if not runtime_settings.get("news_enabled", False):
         return []
 
-    enabled_providers = {**{"marketaux": True, "naver": True, "alpha_vantage": True}, **(runtime_settings.get("news_providers", {}) or {})}
+    enabled_providers = {**{"marketaux": True, "naver": True, "saveticker": True, "alpha_vantage": True}, **(runtime_settings.get("news_providers", {}) or {})}
     results: list[str] = []
     for provider in _enabled_providers(enabled_providers):
         cadence_minutes = _provider_cadence_minutes(provider)
@@ -121,7 +124,7 @@ def refresh_shared_news_for_market(session: Session, market_code: str, *, trigge
 
 def refresh_shared_news_all(session: Session, *, trigger_source: str = "scheduler") -> str:
     runtime_settings = get_runtime_settings(session)
-    enabled_providers = {**{"marketaux": True, "naver": True, "alpha_vantage": True}, **(runtime_settings.get("news_providers", {}) or {})}
+    enabled_providers = {**{"marketaux": True, "naver": True, "saveticker": True, "alpha_vantage": True}, **(runtime_settings.get("news_providers", {}) or {})}
     messages: list[str] = []
     for provider in _enabled_providers(enabled_providers):
         try:
@@ -157,7 +160,7 @@ def refresh_shared_news_for_provider(session: Session, provider: str, *, trigger
     started_at = datetime.now(UTC)
     cadence_minutes = _provider_cadence_minutes(provider)
     target_count = _provider_target_count(provider)
-    dedup_enabled = bool(runtime_settings.get("news_dedup_enabled", False))
+    dedup_enabled = bool(runtime_settings.get("news_dedup_enabled", True))
     update_shared_news_state(
         session,
         GLOBAL_NEWS_SCOPE,
@@ -201,6 +204,27 @@ def refresh_shared_news_for_provider(session: Session, provider: str, *, trigger
 
     provider_items.sort(key=lambda item: ((getattr(item, 'published_at', None) or datetime.min.replace(tzinfo=UTC)), float(getattr(item, 'significance_score', 0.0))), reverse=True)
     batch = _store_news_batch(session, provider, provider_items[:target_count], created_at=window_end, window_label=f"{cadence_minutes}m")
+    if batch is None:
+        message = f"No new unique {provider} shared news items to store in the last {cadence_minutes}m ({provider_status})."
+        update_shared_news_state(
+            session,
+            GLOBAL_NEWS_SCOPE,
+            last_completed_at=window_end,
+            last_status="success",
+            last_message=message,
+        )
+        create_execution_event(
+            session,
+            event_type="news",
+            target_type="provider",
+            market_code=GLOBAL_NEWS_SCOPE,
+            trigger_source=trigger_source,
+            status="success",
+            code=_provider_event_code(provider),
+            message=message,
+        )
+        return message
+
     if runtime_settings.get("news_mode") != DEFAULT_NEWS_MODE:
         runtime_settings["news_mode"] = DEFAULT_NEWS_MODE
         setting = session.scalar(select(AdminSetting).where(AdminSetting.key == "runtime_controls"))
@@ -208,7 +232,8 @@ def refresh_shared_news_for_provider(session: Session, provider: str, *, trigger
             setting.value_json = runtime_settings
             setting.updated_at = datetime.now(UTC)
 
-    message = f"Stored {len(provider_items[:target_count])} {provider} shared news items in batch {batch.batch_key} using {cadence_minutes}m window ({provider_status})."
+    saved_count = getattr(batch, "_saved_count", len(provider_items[:target_count]))
+    message = f"Stored {saved_count} {provider} shared news items in batch {batch.batch_key} using {cadence_minutes}m window ({provider_status})."
     update_shared_news_state(
         session,
         GLOBAL_NEWS_SCOPE,
@@ -232,7 +257,7 @@ def refresh_shared_news_for_provider(session: Session, provider: str, *, trigger
 def recent_news_context(session: Session, market_code: str, *, minutes: int = CONTEXT_LOOKBACK_MINUTES, limit: int = 10) -> list[dict]:
     threshold = datetime.now(UTC) - timedelta(minutes=minutes)
     runtime_settings = get_runtime_settings(session)
-    dedup_enabled = bool(runtime_settings.get("news_dedup_enabled", False))
+    dedup_enabled = bool(runtime_settings.get("news_dedup_enabled", True))
     rows = session.scalars(
         select(SharedNewsItem)
         .where((SharedNewsItem.published_at >= threshold) | (SharedNewsItem.created_at >= threshold))
@@ -241,10 +266,9 @@ def recent_news_context(session: Session, market_code: str, *, minutes: int = CO
     items: list[dict] = []
     seen_keys: set[str] = set()
     for row in rows:
-        key = _row_key(row)
-        if dedup_enabled and key in seen_keys:
+        if dedup_enabled and is_duplicate_article(row.url, row.title, seen_keys):
             continue
-        seen_keys.add(key)
+        register_article_keys(row.url, row.title, seen_keys)
         items.append(
             {
                 "title": row.title,
@@ -262,7 +286,7 @@ def recent_news_context(session: Session, market_code: str, *, minutes: int = CO
 
 def get_shared_news_status(session: Session) -> dict[str, dict]:
     runtime_settings = get_runtime_settings(session)
-    enabled_providers = {**{"marketaux": True, "naver": True, "alpha_vantage": True}, **(runtime_settings.get("news_providers", {}) or {})}
+    enabled_providers = {**{"marketaux": True, "naver": True, "saveticker": True, "alpha_vantage": True}, **(runtime_settings.get("news_providers", {}) or {})}
     state = get_shared_news_state(session)
     entry = state.get("markets", {}).get(GLOBAL_NEWS_SCOPE, {})
     shared_payload = {
@@ -299,6 +323,12 @@ def _provider_event_code(provider: str) -> str:
     return provider.upper()
 
 
+def _as_utc_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _is_provider_due(session: Session, provider: str, *, cadence_minutes: int) -> bool:
     latest = session.scalar(
         select(ExecutionEvent)
@@ -311,7 +341,7 @@ def _is_provider_due(session: Session, provider: str, *, cadence_minutes: int) -
     )
     if latest is None or latest.created_at is None:
         return True
-    return datetime.now(UTC) >= latest.created_at + timedelta(minutes=cadence_minutes)
+    return datetime.now(UTC) >= _as_utc_aware(latest.created_at) + timedelta(minutes=cadence_minutes)
 
 
 def _collect_provider_news(
@@ -347,6 +377,17 @@ def _collect_provider_news(
             return items, f"naver:{len(items)}"
         except Exception as exc:
             return [], f"naver_error:{exc.__class__.__name__}"
+    if provider == "saveticker":
+        try:
+            items = SaveTickerNewsClient().fetch_recent_news(
+                published_after=published_after,
+                published_before=published_before,
+                target_count=target_count,
+                existing_keys=existing_keys,
+            )
+            return items, f"saveticker:{len(items)}"
+        except Exception as exc:
+            return [], f"saveticker_error:{exc.__class__.__name__}"
     if provider == "alpha_vantage":
         try:
             items = AlphaVantageNewsClient().fetch_recent_news(
@@ -367,21 +408,45 @@ def _recent_news_keys(session: Session, *, now: datetime) -> set[str]:
         select(SharedNewsItem)
         .where((SharedNewsItem.published_at >= threshold) | (SharedNewsItem.created_at >= threshold))
     ).all()
-    return {_row_key(row) for row in rows}
+    seen_keys: set[str] = set()
+    for row in rows:
+        register_article_keys(row.url, row.title, seen_keys)
+    return seen_keys
 
 
-def _store_news_batch(session: Session, provider: str, articles: list[object], *, created_at: datetime, window_label: str) -> SharedNewsBatch:
+def _store_news_batch(
+    session: Session,
+    provider: str,
+    articles: list[object],
+    *,
+    created_at: datetime,
+    window_label: str,
+) -> SharedNewsBatch | None:
+    recent_keys = _recent_news_keys(session, now=created_at)
+    seen_in_batch = set(recent_keys)
+    filtered_articles: list[object] = []
+    for article in articles:
+        url = getattr(article, "url", None)
+        title = getattr(article, "title", None)
+        if is_duplicate_article(url, title, seen_in_batch):
+            continue
+        register_article_keys(url, title, seen_in_batch)
+        filtered_articles.append(article)
+
+    if not filtered_articles:
+        return None
+
     batch_key = f"{provider}:{GLOBAL_NEWS_SCOPE}:{created_at.strftime('%Y%m%dT%H%M%S')}"
     batch = SharedNewsBatch(
         batch_key=batch_key,
         market_code=GLOBAL_NEWS_SCOPE,
         source=provider,
-        summary=f"{len(articles)} items collected for the {provider} provider using the {window_label} refresh window.",
+        summary=f"{len(filtered_articles)} items collected for the {provider} provider using the {window_label} refresh window.",
         is_active=True,
         created_at=created_at,
     )
     session.add(batch)
-    for article in articles:
+    for article in filtered_articles:
         session.add(
             SharedNewsItem(
                 batch_key=batch_key,
@@ -396,14 +461,13 @@ def _store_news_batch(session: Session, provider: str, articles: list[object], *
             )
         )
     session.flush()
+    setattr(batch, "_saved_count", len(filtered_articles))
     return batch
 
 
 def _row_key(row: SharedNewsItem) -> str:
-    if row.url:
-        return f"url::{row.url.strip().lower()}"
-    title = re.sub(r"\s+", " ", (row.title or "").strip().lower())
-    return f"title::{title}"
+    keys = news_item_keys(row.url, row.title)
+    return keys[0] if keys else f"title::{row.title or ''}"
 
 
 def _serialize_datetime(value: datetime | None) -> str | None:

@@ -6,6 +6,7 @@ import re
 
 import httpx
 
+from app.news.dedup import is_duplicate_article, news_item_keys, register_article_keys
 from app.services.runtime_secrets import get_runtime_secret
 
 BASE_URL = "https://api.marketaux.com/v1/news/all"
@@ -24,11 +25,13 @@ class MarketauxNewsItem:
     significance_score: float
 
     @property
+    def dedupe_keys(self) -> list[str]:
+        return news_item_keys(self.url, self.title)
+
+    @property
     def dedupe_key(self) -> str:
-        if self.url:
-            return f"url::{self.url.strip().lower()}"
-        normalized_title = re.sub(r"\s+", " ", self.title.strip().lower())
-        return f"title::{normalized_title}"
+        keys = self.dedupe_keys
+        return keys[0] if keys else f"title::{self.title}"
 
 
 class MarketauxNewsClient:
@@ -67,9 +70,9 @@ class MarketauxNewsClient:
                     break
                 for raw_item in raw_items:
                     item = self._parse_item(raw_item, market_code)
-                    if item is None or item.dedupe_key in seen_keys:
+                    if item is None or is_duplicate_article(item.url, item.title, seen_keys):
                         continue
-                    seen_keys.add(item.dedupe_key)
+                    register_article_keys(item.url, item.title, seen_keys)
                     items.append(item)
                     if len(items) >= target_count:
                         return items

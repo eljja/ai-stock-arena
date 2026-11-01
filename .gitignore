@@ -1,4 +1,4 @@
-﻿__pycache__/
+__pycache__/
 .pytest_cache/
 .venv/
 venv/
@@ -14,3 +14,9 @@ venv/
 *.db-wal
 *.db-shm
 logs/
+data/
+run/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo

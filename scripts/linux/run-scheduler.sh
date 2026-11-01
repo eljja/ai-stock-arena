@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/opt/ai-stock-arena/current"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="${APP_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 VENV_PYTHON="$ROOT_DIR/.venv/bin/python"
 
 cd "$ROOT_DIR"

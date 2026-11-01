@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import sys
 import threading
 import time
@@ -39,6 +40,7 @@ from app.api.query_service import (
 )
 from app.config.loader import load_settings
 from app.db.session import SessionLocal
+from app.news.dedup import normalize_title_fingerprint
 from app.services.admin import (
     create_or_update_model_profile,
     delete_model_profile,
@@ -338,6 +340,7 @@ def _weekday_labels(values: list[int]) -> str:
 
 def _news_preview_rows(news_batches: list[dict], limit: int = 50) -> str:
     flattened: list[dict[str, str]] = []
+    seen_fingerprints: set[str] = set()
     for batch in news_batches or []:
         if not isinstance(batch, dict):
             continue
@@ -347,9 +350,15 @@ def _news_preview_rows(news_batches: list[dict], limit: int = 50) -> str:
         for item in source_items or []:
             if not isinstance(item, dict):
                 continue
+            title = html.unescape(str(item.get("title") or "Untitled"))
+            fp = normalize_title_fingerprint(title)
+            if fp and fp in seen_fingerprints:
+                continue
+            if fp:
+                seen_fingerprints.add(fp)
+
             published = str(item.get("published_at") or "")
             source = html.unescape(str(item.get("source") or "Unknown source"))
-            title = html.unescape(str(item.get("title") or "Untitled"))
             summary = html.unescape(str(item.get("summary") or ""))
             tickers = ", ".join(item.get("tickers") or [])
             detail = " | ".join(part for part in [title, summary, source, tickers] if part)
@@ -1432,7 +1441,7 @@ settings_payload = payload["settings"] or {
     "news_enabled": False,
     "news_mode": "shared_off",
     "news_refresh_interval_minutes": 30,
-    "news_dedup_enabled": False,
+    "news_dedup_enabled": True,
     "dashboard_auto_refresh_enabled": True,
     "dashboard_auto_refresh_minutes": 15,
     "fx_rates": {"USDKRW": 1500.0},
@@ -1524,7 +1533,7 @@ if rankings_stale_at:
 
 scheduler_df = pd.DataFrame(scheduler_payload.get("markets", []))
 
-sections = ["Ranking", "Performance", "Market Pulse", "Model Detail", "Shared News", "Admin"]
+sections = ["Ranking", "Performance", "Market Pulse", "Model Detail", "Shared News"]
 if hasattr(st, "segmented_control"):
     active_section = st.segmented_control("Section", sections, default=st.session_state.get("dashboard_section", "Ranking"), key="dashboard_section")
 else:
@@ -1834,569 +1843,6 @@ if active_section == "Model Detail":
                 use_container_width=True,
                 hide_index=True,
             )
-
-if active_section == "Admin":
-    st.markdown('<div class="asa-section-label">Admin Controls</div>', unsafe_allow_html=True)
-    st.caption("All timestamps and windows in this tab are shown in UTC.")
-    st.text_input("Admin token", type="password", key="dashboard_admin_token", help="Press Enter to apply.")
-    current_admin_token = str(st.session_state.get("dashboard_admin_token", ""))
-    admin_mode = _is_admin(current_admin_token)
-    if not settings.admin_token:
-        st.warning("ADMIN_TOKEN is not configured. Admin actions are disabled.")
-    elif not admin_mode:
-        st.info("Enter the correct admin token above and press Enter to unlock admin actions.")
-    else:
-        st.text_input("FastAPI base URL", key="dashboard_api_base_url", placeholder="http://127.0.0.1:8000")
-        st.checkbox("Selected models only", key="dashboard_selected_only")
-        st.success("Admin mode enabled")
-        for message in st.session_state.pop("admin_action_messages", []):
-            st.info(message)
-
-        st.markdown("**News and runtime controls**")
-        execution_event_limit = int(st.session_state.get("dashboard_execution_event_limit", 30))
-        execution_events_payload = load_execution_events(api_base_url or None, execution_event_limit + 1, 0)
-        execution_events_df = _frame_with_columns(execution_events_payload, ["event_type", "target_type", "model_id", "market_code", "trigger_source", "status", "code", "message", "created_at"])
-        scheduler_admin_df = _utc_frame(
-            scheduler_df,
-            ["last_started_at", "last_completed_at", "next_run_at", "news_last_started_at", "news_last_completed_at"],
-        )
-        admin_secrets = load_admin_secrets(api_base_url or None, current_admin_token)
-        news_provider_flags = {**{"marketaux": True, "naver": True, "alpha_vantage": True}, **(settings_payload.get("news_providers", {}) or {})}
-        runtime_cols = st.columns([1.0, 1.0, 1.1, 0.85, 0.9])
-        runtime_cols[0].metric("Trade cadence", f"{int(settings_payload.get('decision_interval_minutes', 60))} min")
-        runtime_cols[1].metric("News refresh cadence", f"{int(settings_payload.get('news_refresh_interval_minutes', 30))} min")
-        runtime_cols[2].metric("Auto refresh", f"{auto_refresh_minutes} min" if auto_refresh_enabled else "OFF")
-        runtime_cols[3].metric("News dedupe", "ON" if bool(settings_payload.get("news_dedup_enabled", False)) else "OFF")
-        runtime_cols[4].metric("USD/KRW", f"{_normalize_fx_rates(settings_payload.get('fx_rates')).get('USDKRW', 1500.0):,.0f}")
-
-        def provider_row(provider_key: str, label: str, cadence_label: str, secret_keys: list[str], event_code: str) -> dict:
-            provider_events = execution_events_df.copy()
-            if not provider_events.empty:
-                provider_events = provider_events[(provider_events["event_type"] == "news") & (provider_events["code"] == event_code)]
-                provider_events = provider_events.sort_values("created_at", ascending=False)
-            latest_event = provider_events.iloc[0] if not provider_events.empty else None
-            return {
-                "Provider": label,
-                "Cadence": cadence_label,
-                "Enabled": bool(news_provider_flags.get(provider_key, True)),
-                "Configured": all(bool(admin_secrets.get(key)) for key in secret_keys),
-                "Runs 24/7": bool(settings_payload.get("news_enabled", False)),
-                "Last status": str(latest_event.get("status") or "") if latest_event is not None else "",
-                "Last refresh (UTC)": _utc_string(latest_event.get("created_at")) if latest_event is not None else "",
-                "Last message": str(latest_event.get("message") or "") if latest_event is not None else "",
-            }
-
-        provider_rows = [
-            provider_row("marketaux", "Marketaux", "15 min / 3 items", ["marketaux_api_token"], "MARKETAUX"),
-            provider_row("naver", "Naver", "20 min / 5 items", ["naver_client_id", "naver_client_secret"], "NAVER"),
-            provider_row("alpha_vantage", "Alpha Vantage", "20 min / 5 items", ["alpha_vantage_api_key"], "ALPHA_VANTAGE"),
-        ]
-        st.dataframe(pd.DataFrame(provider_rows), use_container_width=True, hide_index=True)
-
-        with st.form("runtime_settings_form"):
-            cadence = st.slider(
-                "Decision interval (minutes)",
-                min_value=1,
-                max_value=180,
-                step=1,
-                value=int(settings_payload.get("decision_interval_minutes", 60)),
-            )
-            news_refresh_interval = st.slider(
-                "News refresh interval (minutes)",
-                min_value=1,
-                max_value=120,
-                step=1,
-                value=int(settings_payload.get("news_refresh_interval_minutes", 30)),
-            )
-            dashboard_auto_refresh_enabled = st.checkbox(
-                "Enable dashboard auto refresh for all users",
-                value=bool(settings_payload.get("dashboard_auto_refresh_enabled", True)),
-            )
-            dashboard_auto_refresh_minutes = st.slider(
-                "Dashboard auto refresh interval (minutes)",
-                min_value=5,
-                max_value=60,
-                step=1,
-                value=max(5, min(60, int(settings_payload.get("dashboard_auto_refresh_minutes", 15) or 15))),
-                help="Controls full-page auto reload cadence for every user viewing the dashboard.",
-            )
-            usdkrw_rate = st.number_input(
-                "USD/KRW FX rate",
-                min_value=500.0,
-                max_value=3000.0,
-                step=10.0,
-                value=float(_normalize_fx_rates(settings_payload.get("fx_rates")).get("USDKRW", 1500.0)),
-                help="Used to combine KR and US performance into a single KRW-equivalent view when Performance market is All.",
-            )
-            weekday_defaults = settings_payload.get("active_weekdays", [0, 1, 2, 3, 4])
-            active_weekdays = st.multiselect(
-                "Active weekdays",
-                options=[value for value, _ in WEEKDAY_OPTIONS],
-                default=weekday_defaults,
-                format_func=lambda value: dict(WEEKDAY_OPTIONS)[value],
-            )
-            news_enabled = st.checkbox("Enable shared news", value=bool(settings_payload.get("news_enabled", False)))
-            st.markdown("**News providers**")
-            news_provider_marketaux = st.checkbox("Enable Marketaux", value=bool(news_provider_flags.get("marketaux", True)))
-            news_provider_naver = st.checkbox("Enable Naver", value=bool(news_provider_flags.get("naver", True)))
-            news_provider_alpha = st.checkbox("Enable Alpha Vantage", value=bool(news_provider_flags.get("alpha_vantage", True)))
-            news_dedup_enabled = st.checkbox("Exclude duplicate news items", value=bool(settings_payload.get("news_dedup_enabled", False)), help="Turn this off to store every returned article while validating provider behavior.")
-            st.caption("News providers run on the configured cadence across the full day. Trade runtime windows remain KR/US specific below.")
-            st.markdown("**Trade runtime windows (UTC)**")
-            kr_window = market_windows.get("KR", {})
-            us_window = market_windows.get("US", {})
-            kr_start_utc = st.text_input("KR window start (UTC)", value=kr_window.get("window_start_utc", "23:00"))
-            kr_end_utc = st.text_input("KR window end (UTC)", value=kr_window.get("window_end_utc", "07:00"))
-            us_start_utc = st.text_input("US window start (UTC)", value=us_window.get("window_start_utc", "12:00"))
-            us_end_utc = st.text_input("US window end (UTC)", value=us_window.get("window_end_utc", "22:00"))
-            if st.form_submit_button("Save runtime settings"):
-                payload = {
-                    "decision_interval_minutes": cadence,
-                    "active_weekdays": sorted(active_weekdays),
-                    "news_enabled": news_enabled,
-                    "news_refresh_interval_minutes": news_refresh_interval,
-                    "dashboard_auto_refresh_enabled": dashboard_auto_refresh_enabled,
-                    "dashboard_auto_refresh_minutes": dashboard_auto_refresh_minutes,
-                    "news_providers": {
-                        "marketaux": news_provider_marketaux,
-                        "naver": news_provider_naver,
-                        "alpha_vantage": news_provider_alpha,
-                    },
-                    "news_dedup_enabled": news_dedup_enabled,
-                    "fx_rates": {"USDKRW": float(usdkrw_rate)},
-                    "markets": {
-                        "KR": {
-                            "enabled": True,
-                            "window_start": kr_window.get("window_start", "08:00"),
-                            "window_end": kr_window.get("window_end", "16:00"),
-                            "window_start_utc": kr_start_utc,
-                            "window_end_utc": kr_end_utc,
-                        },
-                        "US": {
-                            "enabled": True,
-                            "window_start": us_window.get("window_start", "08:00"),
-                            "window_end": us_window.get("window_end", "17:00"),
-                            "window_start_utc": us_start_utc,
-                            "window_end_utc": us_end_utc,
-                        },
-                    },
-                }
-                if api_base_url:
-                    with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-                        client.put("/admin/settings", headers={"X-Admin-Token": current_admin_token}, json=payload).raise_for_status()
-                else:
-                    with SessionLocal() as session:
-                        update_runtime_settings(session, payload)
-                        session.commit()
-                refresh_all()
-                st.rerun()
-
-        market_fee_rows = load_market_fee_settings(api_base_url or None, current_admin_token)
-        market_fee_map = {row["market_code"]: row for row in market_fee_rows}
-        st.markdown("**Market trade fees**")
-        st.caption("Commission sliders use practical ranges. Tax can go up to 5%. Regulatory fee is kept tighter because live values are typically much smaller.")
-        fee_cols = st.columns(2)
-        for idx, market_code in enumerate(["KR", "US"]):
-            market_fee = market_fee_map.get(market_code, {
-                "market_code": market_code,
-                "market_name": market_code,
-                "currency": "",
-                "buy_commission_pct": 0.0,
-                "sell_commission_pct": 0.0,
-                "sell_tax_pct": 0.0,
-                "sell_regulatory_fee_pct": 0.0,
-            })
-            with fee_cols[idx]:
-                st.markdown(f"***{market_fee['market_name']} ({market_code})***")
-                with st.form(f"market_fee_form_{market_code}"):
-                    buy_commission_pct = st.slider(
-                        f"{market_code} buy commission (%)",
-                        min_value=0.0,
-                        max_value=1.0,
-                        step=0.001,
-                        value=float(market_fee.get("buy_commission_pct", 0.0) or 0.0),
-                    )
-                    sell_commission_pct = st.slider(
-                        f"{market_code} sell commission (%)",
-                        min_value=0.0,
-                        max_value=1.0,
-                        step=0.001,
-                        value=float(market_fee.get("sell_commission_pct", 0.0) or 0.0),
-                    )
-                    sell_tax_pct = st.slider(
-                        f"{market_code} sell tax (%)",
-                        min_value=0.0,
-                        max_value=5.0,
-                        step=0.001,
-                        value=float(market_fee.get("sell_tax_pct", 0.0) or 0.0),
-                    )
-                    sell_regulatory_fee_pct = st.slider(
-                        f"{market_code} regulatory fee (%)",
-                        min_value=0.0,
-                        max_value=0.1,
-                        step=0.0001,
-                        value=float(market_fee.get("sell_regulatory_fee_pct", 0.0) or 0.0),
-                    )
-                    if st.form_submit_button(f"Save {market_code} fee settings"):
-                        payload = {
-                            "buy_commission_pct": buy_commission_pct,
-                            "sell_commission_pct": sell_commission_pct,
-                            "sell_tax_pct": sell_tax_pct,
-                            "sell_regulatory_fee_pct": sell_regulatory_fee_pct,
-                        }
-                        if api_base_url:
-                            with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-                                client.put(f"/admin/market-fees/{market_code}", headers={"X-Admin-Token": current_admin_token}, json=payload).raise_for_status()
-                        else:
-                            with SessionLocal() as session:
-                                update_market_fee_settings(session, market_code=market_code, **payload)
-                                session.commit()
-                        refresh_all()
-                        st.rerun()
-
-        st.markdown("**Manual actions**")
-        action_cols = st.columns(3)
-        if action_cols[0].button("Refresh shared news now"):
-            if api_base_url:
-                with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=120.0) as client:
-                    result = client.post("/admin/news/refresh", headers={"X-Admin-Token": current_admin_token}).json()
-            else:
-                with SessionLocal() as session:
-                    result = {"messages": run_manual_news_refreshes(session)}
-            st.session_state["admin_action_messages"] = result.get("messages", [])
-            refresh_all()
-            st.rerun()
-        if action_cols[1].button("Run full trade cycle now"):
-            if api_base_url:
-                with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=600.0) as client:
-                    result = client.post("/admin/trades/run", headers={"X-Admin-Token": current_admin_token}).json()
-            else:
-                with SessionLocal() as session:
-                    result = {"messages": run_manual_trade_cycles(session)}
-            st.session_state["admin_action_messages"] = result.get("messages", [])
-            refresh_all()
-            st.rerun()
-        if action_cols[2].button("Disable paid free/experiment APIs"):
-            if api_base_url:
-                with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=120.0) as client:
-                    result = client.post("/admin/models/cleanup-free-pricing", headers={"X-Admin-Token": current_admin_token}).json()
-            else:
-                with SessionLocal() as session:
-                    from app.services.admin import disable_nonzero_cost_free_experiment_models
-
-                    result = {"messages": disable_nonzero_cost_free_experiment_models(session)}
-                    session.commit()
-            st.session_state["admin_action_messages"] = result.get("messages", [])
-            refresh_all()
-            st.rerun()
-
-        st.markdown("**Runtime secrets**")
-        show_secrets = st.toggle("Show secrets", key="dashboard_show_admin_secrets")
-        with st.form("runtime_secrets_form"):
-            openrouter_value = st.text_input(
-                "OpenRouter API token",
-                value=admin_secrets.get("openrouter_api_key") or "",
-                type="default" if show_secrets else "password",
-            )
-            marketaux_value = st.text_input(
-                "Marketaux API token",
-                value=admin_secrets.get("marketaux_api_token") or "",
-                type="default" if show_secrets else "password",
-            )
-            naver_client_id = st.text_input(
-                "Naver client id",
-                value=admin_secrets.get("naver_client_id") or "",
-                type="default" if show_secrets else "password",
-            )
-            naver_client_secret = st.text_input(
-                "Naver client secret",
-                value=admin_secrets.get("naver_client_secret") or "",
-                type="default" if show_secrets else "password",
-            )
-            alpha_vantage_api_key = st.text_input(
-                "Alpha Vantage API key",
-                value=admin_secrets.get("alpha_vantage_api_key") or "",
-                type="default" if show_secrets else "password",
-            )
-            st.caption(
-                f"Masked preview: OpenRouter={_mask_secret(admin_secrets.get('openrouter_api_key'))} | "
-                f"Marketaux={_mask_secret(admin_secrets.get('marketaux_api_token'))} | "
-                f"Naver ID={_mask_secret(admin_secrets.get('naver_client_id'))} | "
-                f"Naver Secret={_mask_secret(admin_secrets.get('naver_client_secret'))} | "
-                f"Alpha Vantage={_mask_secret(admin_secrets.get('alpha_vantage_api_key'))}"
-            )
-            if st.form_submit_button("Save secrets"):
-                payload = {
-                    "openrouter_api_key": openrouter_value,
-                    "marketaux_api_token": marketaux_value,
-                    "naver_client_id": naver_client_id,
-                    "naver_client_secret": naver_client_secret,
-                    "alpha_vantage_api_key": alpha_vantage_api_key,
-                }
-                if api_base_url:
-                    with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-                        client.put("/admin/secrets", headers={"X-Admin-Token": current_admin_token}, json=payload).raise_for_status()
-                else:
-                    with SessionLocal() as session:
-                        update_runtime_secrets(session, payload)
-                        session.commit()
-                refresh_all()
-                st.rerun()
-
-        st.markdown("**Visible models**")
-        visible_models_df = models_df[["model_id", "display_name"]].copy() if not models_df.empty else pd.DataFrame(columns=["model_id", "display_name"])
-        visible_models_df.insert(0, "visible", visible_models_df["model_id"].isin(st.session_state.get("dashboard_models", [])))
-        edited_visible_models = st.data_editor(
-            visible_models_df.rename(columns={"visible": "Visible", "model_id": "Profile ID", "display_name": "Display name"}),
-            use_container_width=True,
-            hide_index=True,
-            height=840,
-            disabled=["Profile ID", "Display name"],
-            key="dashboard_visible_models_editor",
-            column_config={"Visible": st.column_config.CheckboxColumn("Visible")},
-        )
-        visible_selection = edited_visible_models.loc[edited_visible_models["Visible"], "Profile ID"].tolist() if not edited_visible_models.empty else []
-        utility_cols = st.columns([1, 1.2, 2.2])
-        if utility_cols[0].button("Apply visible models"):
-            st.session_state["dashboard_models"] = visible_selection or model_options
-            refresh_all()
-            st.rerun()
-        if utility_cols[1].button("Refresh data"):
-            refresh_all()
-            st.rerun()
-        utility_cols[2].caption("Visible models now show about three times more rows than before. Changes apply after you press Apply visible models.")
-
-        st.markdown("**Investment profiles**")
-        profile_columns = [
-            "model_id",
-            "display_name",
-            "request_model_id",
-            "is_selected",
-            "api_enabled",
-            "search_mode",
-            "uses_custom_prompt",
-            "last_active_at",
-            "status_note",
-            "pricing_label",
-        ]
-        st.dataframe(
-            models_df[profile_columns].rename(
-                columns={
-                    "model_id": "Profile ID",
-                    "display_name": "Display name",
-                    "request_model_id": "Request model",
-                    "is_selected": "In league",
-                    "api_enabled": "API enabled",
-                    "search_mode": "Search",
-                    "uses_custom_prompt": "Custom prompt",
-                    "last_active_at": "Last active (UTC)",
-                    "status_note": "Status note",
-                    "pricing_label": "Pricing",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        profile_ids = models_df["model_id"].tolist()
-        runtime_target = st.selectbox("Profile runtime control", profile_ids, index=0 if profile_ids else None)
-        runtime_row = models_df.loc[models_df["model_id"] == runtime_target].iloc[0] if runtime_target else None
-        runtime_selected = bool(runtime_row["is_selected"]) if runtime_row is not None else False
-        runtime_api_enabled = bool(runtime_row["api_enabled"]) if runtime_row is not None else True
-        runtime_prompt = (runtime_row.get("custom_prompt") or "") if runtime_row is not None else ""
-        keep_selected = st.checkbox("Selected for league", value=runtime_selected)
-        api_enabled = st.checkbox("Enable API calls", value=runtime_api_enabled)
-        custom_prompt = st.text_area(
-            "Custom prompt template",
-            value=runtime_prompt,
-            height=180,
-            help="Optional. This prompt is used as the profile prompt for both markets. You can use {market_code}, {market_name}, {profile_id}, {request_model_id}, and {display_name} placeholders.",
-        )
-        control_cols = st.columns([1, 1, 1.4])
-        if control_cols[0].button("Save profile runtime", disabled=not bool(runtime_target)):
-            payload = {
-                "is_selected": keep_selected,
-                "api_enabled": api_enabled,
-                "custom_prompt": custom_prompt,
-            }
-            if api_base_url:
-                with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-                    client.patch(
-                        f"/admin/models/{runtime_target}",
-                        headers={"X-Admin-Token": current_admin_token},
-                        json=payload,
-                    ).raise_for_status()
-            else:
-                with SessionLocal() as session:
-                    update_model_runtime(
-                        session,
-                        runtime_target,
-                        is_selected=keep_selected,
-                        api_enabled=api_enabled,
-                        custom_prompt=custom_prompt,
-                    )
-                    session.commit()
-            refresh_all()
-            st.rerun()
-        if control_cols[1].button("Delete profile", disabled=not bool(runtime_target)):
-            if api_base_url:
-                with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-                    client.delete(
-                        f"/admin/models/{runtime_target}",
-                        headers={"X-Admin-Token": current_admin_token},
-                    ).raise_for_status()
-            else:
-                with SessionLocal() as session:
-                    delete_model_profile(session, runtime_target)
-                    session.commit()
-            refresh_all()
-            st.rerun()
-        control_cols[2].caption("Turn off API calls to pause token usage without removing the profile from rankings and history.")
-
-        st.markdown("**Create or update investment profile**")
-        with st.form("model_add_form"):
-            profile_id = st.text_input("Profile ID")
-            request_model_id = st.text_input("Request model ID")
-            display_name = st.text_input("Display name")
-            search_mode = st.selectbox("Search mode", ["off", "on"], index=0)
-            prompt_price = st.number_input("Prompt price / 1M", min_value=0.0, value=0.0, step=0.01)
-            completion_price = st.number_input("Completion price / 1M", min_value=0.0, value=0.0, step=0.01)
-            select_profile = st.checkbox("Select profile immediately", value=True)
-            api_enabled_new = st.checkbox("Enable API calls immediately", value=True)
-            custom_prompt_new = st.text_area("Custom prompt template (optional)", height=180)
-            if st.form_submit_button("Add or update profile"):
-                payload = {
-                    "profile_id": profile_id,
-                    "request_model_id": request_model_id,
-                    "display_name": display_name or profile_id,
-                    "search_mode": search_mode,
-                    "select_profile": select_profile,
-                    "api_enabled": api_enabled_new,
-                    "custom_prompt": custom_prompt_new,
-                    "prompt_price_per_million": prompt_price if prompt_price > 0 else None,
-                    "completion_price_per_million": completion_price if completion_price > 0 else None,
-                }
-                if api_base_url:
-                    with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-                        client.post("/admin/models", headers={"X-Admin-Token": current_admin_token}, json=payload).raise_for_status()
-                else:
-                    with SessionLocal() as session:
-                        create_or_update_model_profile(
-                            session,
-                            profile_id=payload["profile_id"],
-                            request_model_id=payload["request_model_id"],
-                            display_name=payload["display_name"],
-                            search_mode=payload["search_mode"],
-                            select_profile=payload["select_profile"],
-                            prompt_price_per_million=payload["prompt_price_per_million"],
-                            completion_price_per_million=payload["completion_price_per_million"],
-                            custom_prompt=payload["custom_prompt"],
-                            api_enabled=payload["api_enabled"],
-                        )
-                        session.commit()
-                refresh_all()
-                st.rerun()
-
-        if not runs_df.empty:
-            st.markdown("**Recent run queue (UTC)**")
-            runs_admin_df = _utc_frame(runs_df, ["requested_at", "started_at", "completed_at", "snapshot_as_of"])
-            st.dataframe(
-                runs_admin_df[[
-                    "requested_at",
-                    "model_id",
-                    "market_code",
-                    "status",
-                    "trigger_source",
-                    "candidate_count",
-                    "summary_message",
-                    "error_message",
-                ]].rename(
-                    columns={
-                        "requested_at": "Requested at (UTC)",
-                        "model_id": "Model",
-                        "market_code": "Market",
-                        "status": "Status",
-                        "trigger_source": "Trigger",
-                        "candidate_count": "Candidates",
-                        "summary_message": "Summary",
-                        "error_message": "Error",
-                    }
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-        if not scheduler_admin_df.empty:
-            st.markdown("**Scheduler status (UTC)**")
-            st.dataframe(
-                scheduler_admin_df[["market_code", "market_timezone", "window_label_utc", "in_active_window", "is_due", "last_status", "last_completed_at", "next_run_at"]].rename(
-                    columns={
-                        "market_code": "Market",
-                        "market_timezone": "Timezone",
-                        "window_label_utc": "Window (UTC)",
-                        "in_active_window": "Trade window",
-                        "is_due": "Trade due now",
-                        "last_status": "Trade last status",
-                        "last_completed_at": "Trade last completed (UTC)",
-                        "next_run_at": "Next trade run (UTC)",
-                    }
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-        st.markdown("**Execution log (UTC)**")
-        execution_events_view = _utc_frame(execution_events_df, ["created_at"]) if not execution_events_df.empty else execution_events_df
-        visible_limit = int(st.session_state.get("dashboard_execution_event_limit", 30))
-        if execution_events_view.empty:
-            st.caption("No execution events recorded yet.")
-        else:
-            event_view = execution_events_view.head(visible_limit).copy()
-            event_view["target"] = event_view.apply(
-                lambda row: (
-                    f"news {row.get('market_code', '')}"
-                    if row.get("event_type") == "news"
-                    else f"{row.get('model_id', '')} / {row.get('market_code', '')}".strip(" /")
-                ),
-                axis=1,
-            )
-            st.dataframe(
-                event_view[["created_at", "target", "trigger_source", "status", "code", "message"]].rename(
-                    columns={
-                        "created_at": "Time (UTC)",
-                        "target": "Target",
-                        "trigger_source": "Trigger",
-                        "status": "Status",
-                        "code": "Code",
-                        "message": "Message",
-                    }
-                ),
-                use_container_width=True,
-                hide_index=True,
-                height=420,
-            )
-            event_control_cols = st.columns([1, 1.4, 3])
-            if visible_limit < len(execution_events_view) and event_control_cols[0].button("Load more logs"):
-                st.session_state["dashboard_execution_event_limit"] = visible_limit + 30
-                st.rerun()
-            if visible_limit > 30 and event_control_cols[1].button("Reset log view"):
-                st.session_state["dashboard_execution_event_limit"] = 30
-                st.rerun()
-            event_control_cols[2].caption("The admin log shows recent one-line trade and news execution results. Use Load more to page through older rows.")
-
-        st.caption("Destructive model deletion remains admin-only. Use API disable to stop token usage without deleting history.")
-
-        st.markdown("**Reset simulation**")
-        if st.button("Reset all trading data and restart", type="primary"):
-            if api_base_url:
-                with httpx.Client(base_url=api_base_url.rstrip("/"), timeout=20.0) as client:
-                    client.post("/admin/reset", headers={"X-Admin-Token": current_admin_token}, params={"reset_prompts": "true"}).raise_for_status()
-            else:
-                with SessionLocal() as session:
-                    reset_simulation(session, reset_prompts=True)
-                    session.commit()
-            refresh_all()
-            st.rerun()
 
 
 

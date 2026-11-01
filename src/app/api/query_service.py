@@ -43,6 +43,7 @@ from app.db.models import (
     SharedNewsItem,
     Trade,
 )
+from app.news.dedup import is_duplicate_article, register_article_keys
 from app.services.admin import get_runtime_settings, get_scheduler_status, is_model_api_enabled
 from app.services.market_history import tracked_tickers_for_market
 from app.services.shared_news import get_shared_news_status
@@ -490,7 +491,11 @@ def list_news_batches(
         items = session.scalars(
             select(SharedNewsItem).where(SharedNewsItem.batch_key.in_(batch_keys)).order_by(SharedNewsItem.published_at.desc())
         ).all()
+        seen_keys: set[str] = set()
         for item in items:
+            if is_duplicate_article(item.url, item.title, seen_keys):
+                continue
+            register_article_keys(item.url, item.title, seen_keys)
             items_by_batch[item.batch_key].append(
                 NewsItemSummary(
                     title=item.title,
@@ -527,18 +532,26 @@ def list_news_items(
     )
     if market_code:
         stmt = stmt.where(SharedNewsItem.market_code == market_code)
-    items = session.scalars(stmt.limit(limit)).all()
-    return [
-        NewsItemSummary(
-            title=item.title,
-            summary=item.summary,
-            source=item.source,
-            url=item.url,
-            published_at=item.published_at,
-            tickers=list(item.tickers_json or []),
+    raw_items = session.scalars(stmt.limit(max(limit * 3, 100))).all()
+    seen_keys: set[str] = set()
+    result: list[NewsItemSummary] = []
+    for item in raw_items:
+        if is_duplicate_article(item.url, item.title, seen_keys):
+            continue
+        register_article_keys(item.url, item.title, seen_keys)
+        result.append(
+            NewsItemSummary(
+                title=item.title,
+                summary=item.summary,
+                source=item.source,
+                url=item.url,
+                published_at=item.published_at,
+                tickers=list(item.tickers_json or []),
+            )
         )
-        for item in items
-    ]
+        if len(result) >= limit:
+            break
+    return result
 
 
 def list_llm_logs(

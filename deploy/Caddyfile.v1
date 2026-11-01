@@ -1,0 +1,30 @@
+openrhiza.com, www.openrhiza.com {
+	reverse_proxy 127.0.0.1:3000
+}
+
+aistockarena.com, www.aistockarena.com {
+	# API 요청 프록시 (/api/* -> 8000)
+	handle_path /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# 검색엔진 및 메타 파일 프록시
+	@meta path /robots.txt /sitemap.xml /llms.txt /favicon.png
+	handle @meta {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# 신규 React 대시보드
+	handle /v2/* {
+		reverse_proxy 127.0.0.1:3001
+	}
+
+	# 기존 Streamlit 웹 대시보드 (메인)
+	handle {
+		reverse_proxy 127.0.0.1:8501
+	}
+}
+
+api.aistockarena.com {
+	reverse_proxy 127.0.0.1:8000
+}

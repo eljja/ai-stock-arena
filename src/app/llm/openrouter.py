@@ -55,6 +55,13 @@ class OpenRouterModel:
 
     @property
     def is_free_like(self) -> bool:
+        lowered = self.model_id.lower()
+        # Exclude audio, music, voice, tts, embedding, safety classifiers
+        if any(keyword in lowered for keyword in ("lyria", "music", "audio", "voice", "tts", "embed", "titan-embed")):
+            return False
+        modality = (self.metadata_json.get("architecture") or {}).get("modality", "")
+        if modality and not modality.endswith("->text"):
+            return False
         return self.is_free_variant or self.is_experiment_variant or self.has_zero_token_cost
 
     @property
