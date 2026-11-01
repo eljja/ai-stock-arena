@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /_stcore/
+
+Sitemap: https://aistockarena.com/sitemap.xml

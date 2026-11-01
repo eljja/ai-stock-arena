@@ -204,15 +204,48 @@ def robots_txt_head() -> Response:
 
 @app.get("/sitemap.xml", include_in_schema=False)
 def sitemap_xml() -> Response:
-    body = f"""<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>{PUBLIC_SITE_URL}/</loc>
-    <changefreq>hourly</changefreq>
-    <priority>1.0</priority>
-  </url>
-</urlset>
-"""
+    from datetime import datetime, UTC
+    import urllib.parse
+    
+    today_str = datetime.now(UTC).strftime("%Y-%m-%d")
+    urls: list[tuple[str, str, str]] = [
+        (f"{PUBLIC_SITE_URL}/", "1.0", "hourly"),
+        (f"{PUBLIC_SITE_URL}/?market=KR", "0.9", "hourly"),
+        (f"{PUBLIC_SITE_URL}/?market=US", "0.9", "hourly"),
+        (f"{PUBLIC_SITE_URL}/?tab=ranking", "0.9", "hourly"),
+        (f"{PUBLIC_SITE_URL}/?tab=charts", "0.8", "hourly"),
+        (f"{PUBLIC_SITE_URL}/?tab=news", "0.8", "hourly"),
+        (f"{PUBLIC_SITE_URL}/?tab=trades", "0.8", "hourly"),
+    ]
+
+    try:
+        with SessionLocal() as session:
+            models = list_models(session=session, selected_only=True)
+            for m in models:
+                escaped_id = urllib.parse.quote(m.model_id, safe="")
+                urls.append((f"{PUBLIC_SITE_URL}/?model={escaped_id}", "0.7", "daily"))
+    except Exception:
+        pass
+
+    url_blocks = []
+    for loc, priority, changefreq in urls:
+        xml_loc = loc.replace("&", "&amp;")
+        url_blocks.append(
+            f"  <url>\n"
+            f"    <loc>{xml_loc}</loc>\n"
+            f"    <lastmod>{today_str}</lastmod>\n"
+            f"    <changefreq>{changefreq}</changefreq>\n"
+            f"    <priority>{priority}</priority>\n"
+            f"  </url>"
+        )
+
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"\n'
+        '        xmlns:xhtml="http://www.w3.org/1999/xhtml">\n'
+        + "\n".join(url_blocks)
+        + "\n</urlset>\n"
+    )
     return Response(content=body, media_type="application/xml; charset=utf-8")
 
 

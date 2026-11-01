@@ -79,6 +79,31 @@ export function App() {
     }
   };
 
+  // Sync tab and model selection from URL query parameters
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get('tab');
+      if (tabParam && ['ranking', 'charts', 'news', 'trades'].includes(tabParam)) {
+        setActiveTab(tabParam as 'ranking' | 'charts' | 'news' | 'trades');
+      }
+      const modelParam = params.get('model');
+      if (modelParam && rankings.length > 0) {
+        const found = rankings.find((r) => r.model_id === modelParam);
+        if (found) setSelectedModel(found);
+      }
+    } catch {}
+  }, [rankings]);
+
+  const handleTabChange = (tab: 'ranking' | 'charts' | 'news' | 'trades') => {
+    setActiveTab(tab);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', tab);
+      window.history.replaceState({}, '', url.toString());
+    } catch {}
+  };
+
   useEffect(() => {
     loadData();
     // Auto refresh every 30 seconds
@@ -126,7 +151,7 @@ export function App() {
         {/* Section Navigation Tabs */}
         <div className="flex items-center gap-2 mb-6 pb-2 border-b border-slate-800/80 overflow-x-auto">
           <button
-            onClick={() => setActiveTab('ranking')}
+            onClick={() => handleTabChange('ranking')}
             className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'ranking'
                 ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-lg shadow-cyan-500/20'
@@ -138,7 +163,7 @@ export function App() {
           </button>
 
           <button
-            onClick={() => setActiveTab('charts')}
+            onClick={() => handleTabChange('charts')}
             className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'charts'
                 ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-lg shadow-cyan-500/20'
@@ -150,7 +175,7 @@ export function App() {
           </button>
 
           <button
-            onClick={() => setActiveTab('news')}
+            onClick={() => handleTabChange('news')}
             className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'news'
                 ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-lg shadow-cyan-500/20'
@@ -162,7 +187,7 @@ export function App() {
           </button>
 
           <button
-            onClick={() => setActiveTab('trades')}
+            onClick={() => handleTabChange('trades')}
             className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'trades'
                 ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-lg shadow-cyan-500/20'
