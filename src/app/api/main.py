@@ -491,6 +491,16 @@ def copy_trade(
 def market_soundtracks():
     return get_soundtracks()
 
+@app.post("/admin/soundtracks/regenerate")
+def admin_regenerate_soundtracks(
+    market: str | None = None,
+    force: bool = True,
+    _: str = Depends(require_admin),
+):
+    from app.services.soundtrack_service import generate_daily_soundtracks_if_due
+    messages = generate_daily_soundtracks_if_due(force=force, target_market=market)
+    return {"status": "ok", "messages": messages}
+
 
 @app.api_route("/soundtracks/{filename}", methods=["GET", "HEAD"])
 def stream_soundtrack(filename: str):
