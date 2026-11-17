@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">AI Stock Arena icon</title>
+  <desc id="desc">A dark rounded square with a cyan arena ring, magenta market line, and white AI monogram.</desc>
+  <defs>
+    <linearGradient id="bg" x1="30" y1="18" x2="226" y2="238" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#09111f"/>
+      <stop offset="0.55" stop-color="#111a30"/>
+      <stop offset="1" stop-color="#1b2c4c"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="42" y1="52" x2="214" y2="210" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7fe9ff"/>
+      <stop offset="1" stop-color="#4d7cff"/>
+    </linearGradient>
+    <linearGradient id="line" x1="54" y1="168" x2="205" y2="74" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e45bc8"/>
+      <stop offset="0.52" stop-color="#7f5cff"/>
+      <stop offset="1" stop-color="#7fe9ff"/>
+    </linearGradient>
+    <filter id="soft-glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.28 0 0 0 0 0.84 0 0 0 0 1 0 0 0 0.7 0"/>
+      <feBlend in="SourceGraphic"/>
+    </filter>
+  </defs>
+  <rect width="256" height="256" rx="58" fill="url(#bg)"/>
+  <path d="M57 175c8 24 36 41 72 41 43 0 78-25 78-56 0-10-4-20-11-28" fill="none" stroke="url(#ring)" stroke-width="13" stroke-linecap="round" opacity="0.95"/>
+  <path d="M202 92c-11-30-39-52-75-52-43 0-78 25-78 56 0 10 4 19 10 27" fill="none" stroke="url(#ring)" stroke-width="13" stroke-linecap="round" opacity="0.7"/>
+  <path d="M54 161l37-36 31 20 39-58 40 27" fill="none" stroke="url(#line)" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" filter="url(#soft-glow)"/>
+  <circle cx="54" cy="161" r="9" fill="#e45bc8"/>
+  <circle cx="91" cy="125" r="9" fill="#9a61ff"/>
+  <circle cx="122" cy="145" r="9" fill="#5b6dff"/>
+  <circle cx="161" cy="87" r="9" fill="#5ec8ff"/>
+  <circle cx="201" cy="114" r="9" fill="#83ecff"/>
+  <path d="M80 98h22l33 72h-21l-5-13H73l-5 13H47l33-72zm-1 44h25l-12-31-13 31z" fill="#f6fbff"/>
+  <path d="M151 98h20v72h-20z" fill="#f6fbff"/>
+</svg>
