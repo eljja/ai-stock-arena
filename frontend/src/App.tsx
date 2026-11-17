@@ -56,7 +56,7 @@ export function App() {
         api.getTrades(50),
         api.getNewsItems(30),
         api.getLLMLogs(30),
-        api.getSnapshots(300),
+        api.getSnapshots(3000),
         api.getMarketSoundtracks().catch(() => []),
       ]);
 

@@ -32,11 +32,21 @@ export function formatPercent(value: number | null | undefined): {
   };
 }
 
+export function parseUtcDate(dateString: string | null | undefined): Date | null {
+  if (!dateString) return null;
+  const trimmed = dateString.trim();
+  if (!trimmed) return null;
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
+  const normalized = hasTimezone ? trimmed : `${trimmed}Z`;
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 export function timeAgo(dateString: string | null | undefined): string {
-  if (!dateString) return '-';
-  const date = new Date(dateString);
+  const date = parseUtcDate(dateString);
+  if (!date) return '-';
   const now = new Date();
-  const diffSec = Math.floor((now.getTime() - date.getTime()) / 1000);
+  const diffSec = Math.max(0, Math.floor((now.getTime() - date.getTime()) / 1000));
 
   if (diffSec < 60) return '방금 전';
   const diffMin = Math.floor(diffSec / 60);

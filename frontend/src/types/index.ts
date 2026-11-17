@@ -92,10 +92,21 @@ export interface LLMDecisionLogSummary {
 export interface SnapshotSummary {
   model_id: string;
   market_code: string;
-  snapshot_time: string;
-  return_pct: number;
+  available_cash: number;
+  invested_value: number;
   total_equity: number;
-  cash?: number;
+  total_return_pct: number;
+  realized_pnl: number;
+  unrealized_pnl: number;
+  volatility: number;
+  sharpe_ratio: number;
+  max_drawdown: number;
+  win_rate: number;
+  profit_factor: number;
+  turnover: number;
+  avg_holding_hours: number;
+  composite_score: number;
+  created_at: string;
 }
 
 export interface MarketSoundtrack {
